@@ -1,0 +1,30 @@
+{
+  "name": "compounding-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local, minimal workspace for learning context engineering (RAG + memory).",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "eval": "tsx scripts/eval.ts",
+    "index": "tsx scripts/build-index.ts",
+    "check:corpus": "tsx scripts/check-corpus.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
+    "@huggingface/transformers": "^4.2.0",
+    "gray-matter": "^4.0.3",
+    "next": "^16.2.10",
+    "pdf-parse": "^2.4.5",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "tsx": "^4.23.0",
+    "typescript": "^6.0.3"
+  }
+}

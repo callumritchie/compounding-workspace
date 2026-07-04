@@ -1,0 +1,6 @@
+{
+  "id": "acme-health",
+  "client": "acme",
+  "sector": "healthcare",
+  "type": "strategy"
+}

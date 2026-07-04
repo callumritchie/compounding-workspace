@@ -1,0 +1,6 @@
+{
+  "id": "beacon-health",
+  "client": "beacon",
+  "sector": "healthcare",
+  "type": "strategy"
+}

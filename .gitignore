@@ -1,0 +1,20 @@
+# Dependencies & build output
+node_modules
+.next
+out
+
+# Local env
+.env
+.env.local
+
+# Runtime, per-user state (private chat histories churn a lot)
+workspace/users/
+
+# Regenerable vector index (rebuild with `npm run index`)
+workspace/index/
+
+# OS
+.DS_Store
+
+# TypeScript build cache
+*.tsbuildinfo

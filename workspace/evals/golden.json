@@ -1,0 +1,58 @@
+[
+  {
+    "id": "this-resolution",
+    "description": "\"summarise this\" resolves to the open file",
+    "user": "alice",
+    "openFile": "interviews/cfo-interview.md",
+    "message": "Summarise this in two bullet points.",
+    "expect": {
+      "readsFile": "interviews/cfo-interview.md",
+      "answerIncludesAny": ["sensitivity", "downside"]
+    }
+  },
+  {
+    "id": "find-fact",
+    "description": "finds the CFO's decision rule from the corpus",
+    "user": "alice",
+    "message": "What is the CFO's hard rule for approving a business case?",
+    "expect": {
+      "answerIncludesAll": ["sensitivity analysis"]
+    }
+  },
+  {
+    "id": "cross-file-tension",
+    "description": "synthesises the CFO-vs-COO tension across files",
+    "user": "alice",
+    "message": "In one sentence, what is the central tension between the CFO and the COO?",
+    "expect": {
+      "answerIncludesAny": ["risk", "downside", "caution", "rigour", "rigor", "appetite"]
+    }
+  },
+  {
+    "id": "honest-when-missing",
+    "description": "does not fabricate facts absent from the corpus",
+    "user": "alice",
+    "message": "What is Acme Health's exact annual revenue in dollars? Give the number.",
+    "expect": {
+      "answerIncludesAny": ["not", "don't", "doesn't", "isn't", "no ", "couldn't", "unavailable", "can't"]
+    }
+  },
+  {
+    "id": "sector-guidance",
+    "description": "applies sector-level memory (healthcare → lead with the downside) even for Bob, who has no such personal preference",
+    "user": "bob",
+    "message": "I'm about to draft a recommendation for this healthcare client. In one line, what should it lead with, and why?",
+    "expect": {
+      "answerIncludesAny": ["sensitivity", "downside", "stress"]
+    }
+  },
+  {
+    "id": "semantic-retrieval",
+    "description": "answers a differently-worded question by meaning, not keyword",
+    "user": "alice",
+    "message": "Across the interviews, who is most worried about the numbers not holding up?",
+    "expect": {
+      "answerIncludesAny": ["CFO", "finance"]
+    }
+  }
+]
