@@ -1,0 +1,11 @@
+{
+  "id": "nom_demo_company",
+  "fact": "On the Acme diligence the CFO wouldn't sign off until the downside was independently modelled — this keeps recurring, so we should make 'lead with an independently-modelled downside' firm-wide guidance.",
+  "targetScope": "company/lessons",
+  "reason": "Observed across several healthcare engagements; generalises beyond one client.",
+  "nominatedBy": "bob",
+  "sourceProject": "acme-diligence",
+  "sourceClient": "acme",
+  "status": "pending",
+  "created": "2026-07-01"
+}

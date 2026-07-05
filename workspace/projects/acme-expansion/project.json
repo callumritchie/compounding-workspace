@@ -1,0 +1,9 @@
+{
+  "id": "acme-expansion",
+  "name": "Care-model expansion",
+  "client": "acme",
+  "sector": "healthcare",
+  "type": "strategy",
+  "status": "in-progress",
+  "stakeholders": ["acme-cfo"]
+}

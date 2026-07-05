@@ -3,7 +3,7 @@ id: learn_acme_cfo_gate
 type: learned
 importance: 0.55
 provenance:
-  origin_user: alice
+  origin_user: callum
   origin_project: acme-diligence
   origin_conversation: diligence-wrap
   created: 2026-06-28T00:00:00.000Z

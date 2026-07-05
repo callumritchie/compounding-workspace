@@ -4,7 +4,7 @@ type: learned
 importance: 0.6
 confidence: 0.7
 provenance:
-  origin_user: alice
+  origin_user: callum
   origin_project: acme-health
   origin_conversation: kickoff
   created: 2026-06-21T00:00:00.000Z

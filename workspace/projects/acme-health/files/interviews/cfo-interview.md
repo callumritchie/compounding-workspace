@@ -1,6 +1,6 @@
 # Interview — CFO, Acme Health
 
-**Date:** 2026-06-18 · **Interviewer:** Alice
+**Date:** 2026-06-18 · **Interviewer:** Callum
 
 ## Summary
 The CFO is open to value-based care but deeply sceptical of optimistic modelling.

@@ -1,4 +1,4 @@
-/* GET /api/history?user=alice&chat=<chatId> → that tab's private chat history. */
+/* GET /api/history?user=callum&chat=<chatId> → that tab's private chat history. */
 
 import { getChatHistory, isUser } from "@/lib/workspace";
 

@@ -13,7 +13,7 @@
   --muted: #77776f;
   --accent: #b4562c;      /* terracotta */
   --accent-soft: #f3e6df;
-  --user-a: #2c6eb4;      /* Alice */
+  --user-a: #2c6eb4;      /* Callum */
   --user-b: #2c8f5a;      /* Bob */
 }
 
@@ -157,7 +157,7 @@ html, body {
   color: #fff;
   border-color: transparent;
 }
-.user-switch button.active.alice { background: var(--user-a); }
+.user-switch button.active.callum { background: var(--user-a); }
 .user-switch button.active.bob   { background: var(--user-b); }
 
 /* ---- Chat ---- */
@@ -349,3 +349,71 @@ html, body {
   padding: 3px 10px; cursor: pointer; font-size: 12px;
 }
 .feedback button:hover { border-color: var(--accent); }
+
+/* Agent roster (the harness) */
+.agent-pick { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 12px; }
+.agent-pick select { border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; background: var(--bg); font: inherit; font-size: 12px; }
+.agents-layout { display: grid; grid-template-columns: 220px 1fr; gap: 14px; margin-top: 10px; }
+@media (max-width: 760px) { .agents-layout { grid-template-columns: 1fr; } }
+.agents-list { display: flex; flex-direction: column; gap: 6px; }
+.agent-row { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; cursor: pointer; background: var(--bg); }
+.agent-row:hover { background: var(--panel); }
+.agent-row.active { background: var(--accent-soft); border-color: var(--accent); }
+.agent-row-name { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.agent-row-name .tag { font-size: 10px; font-weight: 600; text-transform: uppercase; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; }
+.agent-row-desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.agent-editor { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.fld input, .fld select { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; font-weight: 400; color: var(--ink); background: var(--bg); }
+.agent-prompt { min-height: 160px; resize: vertical; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit; font-weight: 400; color: var(--ink); background: var(--bg); line-height: 1.5; }
+.tool-checks { display: flex; flex-wrap: wrap; gap: 8px; font-weight: 400; }
+.tool-check { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+
+/* Memory manager: Library | Pending tabs */
+.modal-tabs { display: flex; gap: 6px; padding: 0 4px 10px; border-bottom: 1px solid var(--border); }
+.modal-tabs button { border: 1px solid var(--border); background: var(--bg); border-radius: 999px; padding: 4px 14px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); }
+.modal-tabs button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+/* Inline accept/decline on a chat suggestion chip */
+.chip-actions { display: inline-flex; gap: 4px; }
+.chip-done { font-size: 11px; color: var(--muted); }
+.mem-chip .ghost { background: transparent; color: var(--muted); }
+
+/* Priority segmented control (replaces the importance slider) */
+.priority { display: inline-flex; align-items: center; gap: 4px; }
+.priority-label { font-size: 12px; color: var(--muted); margin-right: 2px; }
+.priority .prio { border: 1px solid var(--border); background: var(--bg); border-radius: 6px; padding: 2px 10px; cursor: pointer; font-size: 12px; color: var(--muted); }
+.priority .prio.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+
+/* Memory library browse toolbar (find / filter / sort) */
+.mem-toolbar { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 12px; }
+.mem-toolbar .mem-search { flex: 1 1 180px; border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font: inherit; background: var(--bg); }
+.mem-toolbar select { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 12px; background: var(--bg); }
+.mem-meta .mem-uses { font-size: 11px; color: var(--muted); }
+/* Duplicate-pair side-by-side in the Pending housekeeping section */
+.dup-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+@media (max-width: 620px) { .dup-pair { grid-template-columns: 1fr; } }
+.dup-side { border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--bg); }
+.dup-side .nom-meta { margin: 4px 0 6px; }
+.panel-header .hdr-project { color: var(--accent); font-weight: 600; }
+/* Role badges + approval lock notes (governance) */
+.role-badge { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.75; margin-left: 3px; }
+.lock-note { font-size: 12px; color: var(--muted); }
+
+/* Guided scenarios: launcher rows + running guide panel */
+.scenario-row { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; background: var(--bg); }
+.scenario-row:hover { background: var(--accent-soft); border-color: var(--accent); }
+.scenario-row-title { font-weight: 600; font-size: 14px; }
+.scenario-row-blurb { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.guide { position: fixed; right: 18px; bottom: 18px; width: 340px; max-width: calc(100vw - 36px); background: var(--panel); border: 1px solid var(--accent); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.18); padding: 14px; z-index: 50; }
+.guide-head { display: flex; align-items: center; justify-content: space-between; }
+.guide-title { font-weight: 700; font-size: 13px; color: var(--accent); }
+.guide-x { border: none; background: transparent; cursor: pointer; font-size: 18px; line-height: 1; color: var(--muted); }
+.guide-step { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 6px 0 4px; }
+.guide-say { font-size: 14px; line-height: 1.5; }
+.guide-send { width: 100%; margin: 10px 0 6px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--ink); border-radius: 8px; padding: 8px 10px; cursor: pointer; font-size: 12px; text-align: left; }
+.guide-send:disabled { opacity: 0.5; cursor: default; }
+.guide-watch { font-size: 12px; color: var(--muted); background: var(--bg); border-radius: 8px; padding: 8px 10px; margin-top: 6px; line-height: 1.45; }
+.guide-nav { display: flex; justify-content: space-between; margin-top: 12px; }
+.guide-nav button { border: 1px solid var(--border); background: var(--bg); border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 13px; }
+.guide-nav button:disabled { opacity: 0.4; cursor: default; }
+.guide-nav button.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }

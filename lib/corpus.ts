@@ -2,7 +2,7 @@
    corpus.ts — the SHARED file store (the "filing cabinet").
 
    Unlike chat history (which is private per user), the corpus is shared: if
-   Alice's agent writes a file, Bob sees it too. Files live under
+   Callum's agent writes a file, Bob sees it too. Files live under
    workspace/projects/<projectId>/files/ as plain text/markdown you can open.
 
    Four operations — list, read, search, write — mirror the four tools we hand

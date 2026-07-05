@@ -9,13 +9,14 @@
 
 import { promises as fs } from "fs";
 import path from "path";
+import { resolveStakeholders, type Stakeholder } from "./stakeholders";
 
 export type ProjectStatus = "in-progress" | "complete";
 
-// A person involved in the engagement. The same stakeholder id can appear on
-// several projects (even for different clients) — that's what lets a memory
-// about a person follow them across engagements (the `stakeholder/<id>` scope).
-export type Stakeholder = { id: string; name: string; role: string };
+// A person involved in the engagement. Defined once in the stakeholder registry
+// (lib/stakeholders.ts); projects reference them by id. Re-exported here for the
+// callers that already import Stakeholder from this module.
+export type { Stakeholder };
 
 export type ProjectConfig = {
   id: string;
@@ -30,7 +31,15 @@ export type ProjectConfig = {
 export async function getProjectConfig(projectId: string): Promise<ProjectConfig> {
   const file = path.join(process.cwd(), "workspace", "projects", projectId, "project.json");
   try {
-    const cfg = JSON.parse(await fs.readFile(file, "utf8")) as Partial<ProjectConfig>;
+    const cfg = JSON.parse(await fs.readFile(file, "utf8")) as Partial<ProjectConfig> & {
+      stakeholders?: unknown;
+    };
+    // project.json lists stakeholders by id (["acme-cfo", …]); resolve each to a
+    // full record via the registry. Tolerate the old inline-object format too.
+    const raw = Array.isArray(cfg.stakeholders) ? cfg.stakeholders : [];
+    const ids = raw
+      .map((s) => (typeof s === "string" ? s : (s as { id?: string })?.id))
+      .filter((x): x is string => typeof x === "string");
     return {
       id: projectId,
       name: cfg.name ?? projectId,
@@ -38,9 +47,7 @@ export async function getProjectConfig(projectId: string): Promise<ProjectConfig
       sector: cfg.sector ?? "unknown",
       type: cfg.type ?? "unknown",
       status: cfg.status === "complete" ? "complete" : "in-progress",
-      stakeholders: Array.isArray(cfg.stakeholders)
-        ? cfg.stakeholders.filter((s): s is Stakeholder => !!s && typeof s.id === "string")
-        : [],
+      stakeholders: await resolveStakeholders(ids),
     };
   } catch {
     // Sensible default if a project has no config file yet.

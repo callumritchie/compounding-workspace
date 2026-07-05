@@ -1,6 +1,6 @@
 # Acme Health — Value-Based Care Recommendation
 
-**Prepared by:** Alice · **Audience:** CFO (economic buyer), COO, Board
+**Prepared by:** Callum · **Audience:** CFO (economic buyer), COO, Board
 **Decision forum:** Thursday finance review (where the real decision is made — kickoff-notes.md)
 
 ---

@@ -1,6 +1,6 @@
 # Interview — COO, Acme Health
 
-**Date:** 2026-06-20 · **Interviewer:** Alice
+**Date:** 2026-06-20 · **Interviewer:** Callum
 
 ## Summary
 The COO is the strongest internal advocate for value-based care and is confident

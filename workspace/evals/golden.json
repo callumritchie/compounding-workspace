@@ -2,7 +2,7 @@
   {
     "id": "this-resolution",
     "description": "\"summarise this\" resolves to the open file",
-    "user": "alice",
+    "user": "callum",
     "openFile": "interviews/cfo-interview.md",
     "message": "Summarise this in two bullet points.",
     "expect": {
@@ -13,7 +13,7 @@
   {
     "id": "find-fact",
     "description": "finds the CFO's decision rule from the corpus",
-    "user": "alice",
+    "user": "callum",
     "message": "What is the CFO's hard rule for approving a business case?",
     "expect": {
       "answerIncludesAll": ["sensitivity analysis"]
@@ -22,7 +22,7 @@
   {
     "id": "cross-file-tension",
     "description": "synthesises the CFO-vs-COO tension across files",
-    "user": "alice",
+    "user": "callum",
     "message": "In one sentence, what is the central tension between the CFO and the COO?",
     "expect": {
       "answerIncludesAny": ["risk", "downside", "caution", "rigour", "rigor", "appetite"]
@@ -31,7 +31,7 @@
   {
     "id": "honest-when-missing",
     "description": "does not fabricate facts absent from the corpus",
-    "user": "alice",
+    "user": "callum",
     "message": "What is Acme Health's exact annual revenue in dollars? Give the number.",
     "expect": {
       "answerIncludesAny": ["not", "don't", "doesn't", "isn't", "no ", "couldn't", "unavailable", "can't"]
@@ -49,7 +49,7 @@
   {
     "id": "semantic-retrieval",
     "description": "answers a differently-worded question by meaning, not keyword",
-    "user": "alice",
+    "user": "callum",
     "message": "Across the interviews, who is most worried about the numbers not holding up?",
     "expect": {
       "answerIncludesAny": ["CFO", "finance"]

@@ -16,6 +16,7 @@
 
 import { promises as fs } from "fs";
 import path from "path";
+import { DEFAULT_PROJECT } from "./corpus";
 
 // Per-assistant-message "X-ray": everything that produced the answer, stored
 // with the message so it can be inspected later (persists across reloads).
@@ -37,11 +38,18 @@ export type ChatMeta = {
   updated: string;
   lastUserMessage?: string;
   openFile?: string | null;
+  agentId?: string; // which agent from the roster this chat uses (undefined = default)
+  projectId?: string; // which project this chat belongs to (undefined = default project)
 };
+
+// The project a chat belongs to, backfilling old chats to the default project.
+export function chatProject(c: ChatMeta): string {
+  return c.projectId ?? DEFAULT_PROJECT;
+}
 
 // The two simulated users. Switching between them is how we demo "shared vs
 // private": chat history is PRIVATE, files + memory are SHARED.
-export const USERS = ["alice", "bob"] as const;
+export const USERS = ["callum", "bob"] as const;
 export type User = (typeof USERS)[number];
 
 // Root of all on-disk state.
@@ -70,15 +78,20 @@ async function writeIndex(user: User, list: ChatMeta[]): Promise<void> {
   await fs.writeFile(indexPath(user), JSON.stringify(list, null, 2), "utf8");
 }
 
-// The tab list (empty if this user has never chatted).
+// The full tab list (all projects). The chat route + project filtering use this.
 export async function listChats(user: User): Promise<ChatMeta[]> {
   return readIndex(user);
 }
 
-// Start a new tab.
-export async function createChat(user: User, title = "New chat"): Promise<ChatMeta> {
+// Just this user's chats within one project (old chats fall under the default).
+export async function listChatsForProject(user: User, projectId: string): Promise<ChatMeta[]> {
+  return (await readIndex(user)).filter((c) => chatProject(c) === projectId);
+}
+
+// Start a new tab in a project.
+export async function createChat(user: User, projectId: string, title = "New chat"): Promise<ChatMeta> {
   const chatId = `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
-  const meta: ChatMeta = { chatId, title, updated: new Date().toISOString() };
+  const meta: ChatMeta = { chatId, title, updated: new Date().toISOString(), projectId };
   const list = await readIndex(user);
   list.push(meta);
   await writeIndex(user, list);

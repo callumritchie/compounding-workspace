@@ -11,7 +11,7 @@
 
      scope examples:  company/policy   company/lessons
                       project/acme-health
-                      personal/alice   personal/bob
+                      personal/callum   personal/bob
 
    Two TYPES cut across every scope:
      • constitution — authored, authoritative, doesn't decay (policies, prefs)
@@ -34,9 +34,24 @@ export type Memory = {
   appliesTo?: Record<string, string>;
   provenance?: Record<string, unknown>;
   status?: string; // active | proposed | retracted
+  useCount?: number; // how many turns this memory has actually been injected into
+  lastUsed?: string; // YYYY-MM-DD of the last turn it was injected
+  lastReinforced?: string; // YYYY-MM-DD of the last 👍/👎 that moved it
+  created?: string; // YYYY-MM-DD it was first written (from provenance)
   body: string;
   file: string;
 };
+
+// Pull the lifecycle fields (usage + dates) out of a parsed frontmatter block.
+function lifecycleFields(data: Record<string, unknown>): Pick<Memory, "useCount" | "lastUsed" | "lastReinforced" | "created"> {
+  const prov = (data.provenance ?? {}) as Record<string, unknown>;
+  return {
+    useCount: typeof data.use_count === "number" ? data.use_count : 0,
+    lastUsed: data.last_used ? String(data.last_used) : undefined,
+    lastReinforced: data.last_reinforced ? String(data.last_reinforced) : undefined,
+    created: prov.created ? String(prov.created) : undefined,
+  };
+}
 
 const MEM_ROOT = path.join(process.cwd(), "workspace", "memory");
 
@@ -64,6 +79,7 @@ export async function readMemoriesInScope(scope: string): Promise<Memory[]> {
       appliesTo: data.applies_to,
       provenance: data.provenance,
       status: data.status ? String(data.status) : "active",
+      ...lifecycleFields(data),
       body: content.trim(),
       file: path.join(dir, name),
     });
@@ -233,6 +249,7 @@ export async function listAllMemories(): Promise<Memory[]> {
         appliesTo: data.applies_to,
         provenance: data.provenance,
         status: data.status ? String(data.status) : "active",
+        ...lifecycleFields(data),
         body: content.trim(),
         file: path.join(dir, e.name),
       });
@@ -269,4 +286,26 @@ export async function deleteMemory(scope: string, id: string): Promise<boolean> 
   if (!file) return false;
   await fs.unlink(file);
   return true;
+}
+
+// Record that these memories were actually injected this turn: bump use_count and
+// stamp last_used. This is the USAGE signal (distinct from correctness-based
+// reinforcement) — it powers "most-used" sorting and staleness detection.
+export async function recordMemoryUse(refs: { scope: string; id: string }[]): Promise<void> {
+  await Promise.all(
+    refs.map(({ scope, id }) =>
+      updateMemoryFrontmatter(scope, id, (data) => {
+        data.use_count = (typeof data.use_count === "number" ? data.use_count : 0) + 1;
+        data.last_used = new Date().toISOString().slice(0, 10);
+      }).catch(() => false)
+    )
+  );
+}
+
+// Snooze a stale memory: touch last_used to now so it drops off the "suggest
+// archiving" list without bumping its usefulness score.
+export async function touchMemory(scope: string, id: string): Promise<boolean> {
+  return updateMemoryFrontmatter(scope, id, (data) => {
+    data.last_used = new Date().toISOString().slice(0, 10);
+  });
 }

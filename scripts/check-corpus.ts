@@ -5,7 +5,7 @@ import { DEFAULT_PROJECT } from "../lib/corpus";
 import { executeTool } from "../lib/tools";
 
 async function main() {
-  const ctx = { projectId: DEFAULT_PROJECT, user: "alice" };
+  const ctx = { projectId: DEFAULT_PROJECT, user: "callum" };
 
   console.log("— list_files —");
   console.log((await executeTool(ctx, "list_files", {})).result, "\n");
