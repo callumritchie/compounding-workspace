@@ -231,10 +231,9 @@ export default function Home() {
   const [showProposals, setShowProposals] = useState(false);
   const [abstracts, setAbstracts] = useState<Record<string, { text: string; leak?: Leak }>>({});
 
-  const [showCompare, setShowCompare] = useState(false);
-  const [compareQ, setCompareQ] = useState("");
   const [comparing, setComparing] = useState(false);
-  const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
+  // Ephemeral "compare retrieval" card shown inline in the thread (not persisted).
+  const [inlineCompare, setInlineCompare] = useState<{ question: string; result: CompareResult } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [showMemory, setShowMemory] = useState(false);
   const [allMemories, setAllMemories] = useState<MemItem[]>([]);
@@ -375,17 +374,19 @@ export default function Home() {
     if (d.ok) setNominations((ns) => ns.filter((n) => n.id !== id));
   }
 
+  // Run the retrieval comparison for whatever's in the composer, inline in the thread.
   async function runCompare() {
-    if (!compareQ.trim() || comparing) return;
+    const q = input.trim();
+    if (!q || comparing) return;
     setComparing(true);
-    setCompareResult(null);
+    setInlineCompare(null);
     try {
       const d = await fetch("/api/compare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: compareQ, project }),
+        body: JSON.stringify({ question: q, project }),
       }).then((r) => r.json());
-      if (!d.error) setCompareResult(d);
+      if (!d.error) setInlineCompare({ question: q, result: d });
     } finally {
       setComparing(false);
     }
@@ -686,9 +687,6 @@ export default function Home() {
               </optgroup>
             ))}
           </select>
-          <button className="queue-btn" onClick={() => setShowCompare(true)}>
-            ⚖ Compare retrieval
-          </button>
           <button className="queue-btn" onClick={() => { loadPromotions(); loadSignals(); setShowQueue(true); }}>
             ⬆ Promotions{nominations.length ? ` (${nominations.length})` : ""}
           </button>
@@ -795,6 +793,42 @@ export default function Home() {
                       </div>
                     );
                   })}
+              {inlineCompare && (
+                <div className="msg assistant">
+                  <div className="role">retrieval comparison</div>
+                  <div className="inline-compare">
+                    <div className="ic-head">
+                      <span>Same question, three ways to fetch context · <b>{project}</b></span>
+                      <button className="ic-x" title="dismiss" onClick={() => setInlineCompare(null)}>×</button>
+                    </div>
+                    <div className="ic-q">“{inlineCompare.question}”</div>
+                    <div className="compare-grid">
+                      {(["naive", "reranked", "agentic"] as const).map((mode) => (
+                        <div key={mode} className="compare-col">
+                          <div className="compare-h">
+                            {mode === "naive" ? "Naïve vector" : mode === "reranked" ? "Reranked vector" : "Agentic"}
+                          </div>
+                          {mode !== "agentic" &&
+                            inlineCompare.result[mode].chunks.map((c, i) => (
+                              <div key={i} className="compare-chunk">
+                                <span className="chunk-score">{c.score.toFixed(2)}</span> {c.file}
+                                <div className="chunk-text">{c.text.slice(0, 130)}…</div>
+                              </div>
+                            ))}
+                          {mode === "agentic" &&
+                            inlineCompare.result.agentic.trace.map((t, i) => (
+                              <div key={i} className="compare-chunk">
+                                <code>{t.tool}</code> {t.summary}
+                              </div>
+                            ))}
+                          <div className="compare-answer">{inlineCompare.result[mode].answer}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="hint">Agentic runs without memory, to isolate the retrieval strategy.</div>
+                  </div>
+                </div>
+              )}
               {loading && (
                 <div className="msg assistant">
                   <div className="role">agent</div>
@@ -822,6 +856,14 @@ export default function Home() {
                 onKeyDown={onKeyDown}
                 placeholder="Ask the agent… (Enter to send, Shift+Enter for a new line)"
               />
+              <button
+                className="compare-btn"
+                onClick={runCompare}
+                disabled={comparing || loading || !input.trim()}
+                title="See how three retrieval strategies would answer this — inline, without sending it"
+              >
+                {comparing ? "…" : "⚖ Compare"}
+              </button>
               <button onClick={send} disabled={loading || !input.trim()}>Send</button>
             </div>
           </div>
@@ -858,60 +900,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* ---- Retrieval comparison (modal) ---- */}
-      {showCompare && (
-        <div className="modal-overlay" onClick={() => setShowCompare(false)}>
-          <div className="modal wide" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <h2>Retrieval comparison · {project}</h2>
-              <button onClick={() => setShowCompare(false)}>×</button>
-            </div>
-            <div className="modal-body">
-              <div className="compare-input">
-                <input
-                  value={compareQ}
-                  onChange={(e) => setCompareQ(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") runCompare(); }}
-                  placeholder="Ask a question about this project's files…"
-                />
-                <button className="promote" onClick={runCompare} disabled={comparing || !compareQ.trim()}>
-                  {comparing ? "Running…" : "Run"}
-                </button>
-              </div>
-              <p className="hint">
-                Same question, three ways to fetch context. Watch how the retrieved passages — and the
-                answer — differ. (Agentic runs without memory, to isolate the retrieval strategy.)
-              </p>
-
-              {compareResult && (
-                <div className="compare-grid">
-                  {(["naive", "reranked", "agentic"] as const).map((mode) => (
-                    <div key={mode} className="compare-col">
-                      <div className="compare-h">
-                        {mode === "naive" ? "Naïve vector" : mode === "reranked" ? "Reranked vector" : "Agentic"}
-                      </div>
-                      {mode !== "agentic" &&
-                        compareResult[mode].chunks.map((c, i) => (
-                          <div key={i} className="compare-chunk">
-                            <span className="chunk-score">{c.score.toFixed(2)}</span> {c.file}
-                            <div className="chunk-text">{c.text.slice(0, 130)}…</div>
-                          </div>
-                        ))}
-                      {mode === "agentic" &&
-                        compareResult.agentic.trace.map((t, i) => (
-                          <div key={i} className="compare-chunk">
-                            <code>{t.tool}</code> {t.summary}
-                          </div>
-                        ))}
-                      <div className="compare-answer">{compareResult[mode].answer}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ---- Promotion review queue (modal) ---- */}
       {showQueue && (

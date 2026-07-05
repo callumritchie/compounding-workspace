@@ -263,6 +263,16 @@ html, body {
   padding: 0 16px; cursor: pointer; font-weight: 600;
 }
 .composer button:disabled { opacity: 0.5; cursor: default; }
+/* Secondary composer action: inline retrieval comparison */
+.composer button.compare-btn { background: var(--panel); color: var(--ink); border: 1px solid var(--border); font-weight: 600; white-space: nowrap; }
+.composer button.compare-btn:hover:not(:disabled) { background: var(--bg); }
+/* Inline "compare retrieval" card, shown in the thread */
+.inline-compare { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--bg); }
+.ic-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.ic-x { border: none; background: transparent; cursor: pointer; font-size: 16px; line-height: 1; color: var(--muted); padding: 0 4px; }
+.ic-x:hover { color: var(--ink); }
+.ic-q { font-size: 13px; font-weight: 600; margin: 6px 0 2px; }
+.inline-compare .compare-grid { grid-template-columns: 1fr; gap: 10px; margin-top: 10px; }
 
 /* ---- File list, viewer & glass-box ---- */
 .upload {
