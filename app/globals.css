@@ -177,19 +177,21 @@ html, body {
 .toklegend .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; flex: none; }
 .tokcap { font-size: 11px; color: var(--muted); }
 
-/* Chat tabs */
-.tabbar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--border); flex: none; }
-.tabbar .tabs { display: flex; align-items: center; gap: 4px; overflow-x: auto; flex: 1 1 auto; min-width: 0; }
-.tabbar .tab { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px 6px 0 0; background: var(--panel); cursor: pointer; font-size: 12px; max-width: 160px; white-space: nowrap; flex: none; }
-.tabbar .tab.active { background: var(--bg); border-bottom-color: var(--bg); font-weight: 600; }
-.tabbar .tab-title { overflow: hidden; text-overflow: ellipsis; }
-.tabbar .tab-x { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0; }
-.tabbar .tab-x:hover { color: var(--danger, #ef4444); }
-/* New/Clear live OUTSIDE the scrollable .tabs, so they stay visible however many tabs there are */
-.tabbar .tab-new, .tabbar .tab-clear { flex: none; border: 1px solid var(--border); background: var(--panel); border-radius: 6px; cursor: pointer; line-height: 1; padding: 4px 8px; white-space: nowrap; }
-.tabbar .tab-new { font-size: 12px; font-weight: 600; }
-.tabbar .tab-clear { font-size: 12px; color: var(--muted); }
-.tabbar .tab-new:hover, .tabbar .tab-clear:hover { background: var(--bg); }
+/* Chats sidebar (right panel) */
+.new-chat { width: 100%; border: 1px solid var(--border); background: var(--panel); border-radius: 8px; padding: 8px; cursor: pointer; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.new-chat:hover { background: var(--bg); }
+.chat-row { display: flex; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
+.chat-row:hover { background: var(--panel); }
+.chat-row.active { background: var(--accent-soft); border-color: var(--border); }
+.chat-row-main { flex: 1 1 auto; min-width: 0; }
+.chat-row-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-row-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.chat-row-actions { display: flex; gap: 2px; flex: none; opacity: 0; }
+.chat-row:hover .chat-row-actions, .chat-row.active .chat-row-actions { opacity: 1; }
+.chat-row-actions button { border: none; background: transparent; cursor: pointer; font-size: 12px; padding: 2px 4px; border-radius: 4px; }
+.chat-row-actions button:hover { background: var(--bg); }
+.clear-chat { width: 100%; margin-top: 8px; border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 8px; padding: 6px; cursor: pointer; font-size: 12px; }
+.clear-chat:hover { background: var(--panel); }
 
 /* Live "watch it work" view (streaming) */
 .live { display: flex; flex-direction: column; gap: 4px; }

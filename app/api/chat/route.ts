@@ -68,7 +68,13 @@ export async function POST(req: Request) {
     { label: "Current message", tokens: estimateTokens(message), tier: "volatile" },
   ].filter((s) => s.tokens > 0);
 
-  const injected = assembled.report.injected.map((m) => ({ scope: m.scope, tier: m.tier, text: m.text }));
+  const injected = assembled.report.injected.map((m) => ({
+    id: m.id,
+    scope: m.scope,
+    type: m.type,
+    tier: m.tier,
+    text: m.text,
+  }));
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({

@@ -17,7 +17,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 type TraceEntry = { tool: string; input: Record<string, unknown>; summary: string; result?: string };
-type InjectedLite = { scope: string; tier: string; text: string };
+type InjectedLite = { id: string; scope: string; type: string; tier: string; text: string };
 type MessageMeta = {
   trace?: TraceEntry[];
   reasoning?: string;
@@ -41,8 +41,20 @@ type ContextReport = {
   composition?: CompPart[];
 };
 
-// The per-message "X-ray": what informed a given answer (stored on the message).
-function Xray({ meta }: { meta: MessageMeta }) {
+// The per-message "X-ray": everything that informed a given answer — reasoning,
+// tools + retrieved passages, memory used (with retract), the input-composition
+// bar, tokens, and 👍/👎 feedback (all folded in from the old glass box).
+function Xray({
+  meta,
+  onFeedback,
+  onRetract,
+}: {
+  meta: MessageMeta;
+  onFeedback: (v: "good" | "bad") => Promise<string>;
+  onRetract: (scope: string, id: string) => Promise<string>;
+}) {
+  const [note, setNote] = useState<string | null>(null);
+  const [gone, setGone] = useState<Record<string, boolean>>({});
   return (
     <div className="xray">
       {meta.reasoning ? (
@@ -70,17 +82,60 @@ function Xray({ meta }: { meta: MessageMeta }) {
       {meta.injected && meta.injected.length > 0 && (
         <>
           <div className="xray-h">🧠 memory used ({meta.injected.length})</div>
-          {meta.injected.map((m, i) => (
-            <div key={i} className="xray-mem">
-              <div>
-                <span className={`pill ${m.tier}`}>{m.tier === "stable" ? "🔒 always-on" : "↻ per-turn"}</span>{" "}
-                <span className="mem-inj-scope">{m.scope}</span>
+          {meta.injected.map((m, i) => {
+            const key = `${m.scope}:${m.id}`;
+            if (gone[key]) return null;
+            return (
+              <div key={i} className="xray-mem">
+                <div className="mem-inj-top">
+                  <span className={`pill ${m.tier}`}>{m.tier === "stable" ? "🔒 always-on" : "↻ per-turn"}</span>
+                  <span className="mem-inj-scope">{m.scope}</span>
+                  {m.type === "learned" && (
+                    <button
+                      className="retract"
+                      title="stop injecting this memory (from next turn)"
+                      onClick={async () => {
+                        setNote(await onRetract(m.scope, m.id));
+                        setGone((g) => ({ ...g, [key]: true }));
+                      }}
+                    >
+                      Retract
+                    </button>
+                  )}
+                </div>
+                <div className="mem-inj-text">“{m.text}”</div>
               </div>
-              <div className="mem-inj-text">“{m.text}”</div>
-            </div>
-          ))}
+            );
+          })}
         </>
       )}
+      {meta.composition && meta.composition.length > 0 && (() => {
+        const parts = meta.composition!;
+        const total = parts.reduce((s, p) => s + p.tokens, 0) || 1;
+        return (
+          <>
+            <div className="xray-h">input composition (~{total}t)</div>
+            <div className="tokbar">
+              {parts.map((p, i) => (
+                <div
+                  key={p.label}
+                  className="seg"
+                  style={{ width: `${(p.tokens / total) * 100}%`, background: COMP_COLORS[i % COMP_COLORS.length] }}
+                  title={`${p.label}: ~${p.tokens}t (${p.tier})`}
+                />
+              ))}
+            </div>
+            <div className="toklegend">
+              {parts.map((p, i) => (
+                <span key={p.label} className="legitem">
+                  <span className="swatch" style={{ background: COMP_COLORS[i % COMP_COLORS.length] }} />
+                  {p.tier === "cached" ? "🔒 " : ""}{p.label} ~{p.tokens}t
+                </span>
+              ))}
+            </div>
+          </>
+        );
+      })()}
       {meta.usage && (
         <>
           <div className="xray-h">tokens</div>
@@ -89,6 +144,12 @@ function Xray({ meta }: { meta: MessageMeta }) {
           </div>
         </>
       )}
+      <div className="xray-h">was this answer right?</div>
+      <div className="feedback">
+        <button onClick={async () => setNote(await onFeedback("good"))}>👍 good</button>
+        <button onClick={async () => setNote(await onFeedback("bad"))}>👎 off</button>
+      </div>
+      {note && <div className="ctx-item muted">{note}</div>}
     </div>
   );
 }
@@ -159,8 +220,6 @@ export default function Home() {
   const [openContent, setOpenContent] = useState<string>("");
   const [recentActions, setRecentActions] = useState<string[]>([]);
   const [trace, setTrace] = useState<TraceEntry[]>([]);
-  const [context, setContext] = useState<ContextReport | null>(null);
-  const [feedbackNote, setFeedbackNote] = useState<string | null>(null);
 
   const [project, setProject] = useState("acme-health");
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
@@ -346,8 +405,6 @@ export default function Home() {
   async function openChatMeta(meta: ChatMeta) {
     setActiveChat(meta.chatId);
     setTrace([]);
-    setContext(null);
-    setFeedbackNote(null);
     setRecentActions([]);
     setOpenFile(null);
     setOpenContent("");
@@ -405,8 +462,17 @@ export default function Home() {
     });
     setMessages([]);
     setTrace([]);
-    setContext(null);
-    setFeedbackNote(null);
+    refreshChats();
+  }
+
+  async function renameChat(meta: ChatMeta) {
+    const title = window.prompt("Rename chat:", meta.title || "New chat");
+    if (title == null || !title.trim()) return;
+    await fetch("/api/chats/rename", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user, chatId: meta.chatId, title: title.trim() }),
+    });
     refreshChats();
   }
 
@@ -494,7 +560,6 @@ export default function Home() {
     setMessages((m) => [...m, { role: "user", content: text }]);
     setInput("");
     setLoading(true);
-    setFeedbackNote(null);
     setLiveSteps([]);
     setLiveReasoning("");
     setLiveText("");
@@ -538,7 +603,6 @@ export default function Home() {
           } else if (ev.type === "done") {
             setMessages((ev.history as Message[]) ?? []);
             setTrace((ev.trace as TraceEntry[]) ?? []);
-            setContext((ev.context as ContextReport) ?? null);
             if (ev.files) setFiles(ev.files as string[]);
             loadPromotions(); // the agent may have nominated a lesson this turn
             loadSignals(); // ...or logged a recurring signal
@@ -564,29 +628,30 @@ export default function Home() {
   }
 
   // Correctness feedback → reinforce the learned memories behind this answer.
-  async function sendFeedback(verdict: "good" | "bad") {
-    if (!context) return;
-    const items = context.injected
+  // 👍/👎 on a specific answer → reinforce the LEARNED memories that informed it
+  // (reinforcement keys off correctness, not usage; constitution is never nudged).
+  async function feedbackForMessage(meta: MessageMeta, verdict: "good" | "bad"): Promise<string> {
+    const items = (meta.injected ?? [])
       .filter((m) => m.type === "learned")
       .map((m) => ({ scope: m.scope, id: m.id, type: m.type }));
+    if (items.length === 0) return "no learned memories to nudge (constitution is fixed).";
     const r = await fetch("/api/feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ verdict, items }),
     }).then((res) => res.json());
     const dir = verdict === "good" ? "↑" : "↓";
-    setFeedbackNote(`${r.changed ?? 0} learned ${r.changed === 1 ? "memory" : "memories"} nudged ${dir} (constitution untouched).`);
+    return `${r.changed ?? 0} learned ${r.changed === 1 ? "memory" : "memories"} nudged ${dir} (constitution untouched).`;
   }
 
   // Contest / retract a memory so it stops being injected.
-  async function retract(scope: string, id: string) {
+  async function retractInXray(scope: string, id: string): Promise<string> {
     await fetch("/api/memory/retract", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ scope, id }),
     });
-    setContext((c) => (c ? { ...c, injected: c.injected.filter((m) => !(m.scope === scope && m.id === id)) } : c));
-    setFeedbackNote(`retracted ${scope} — it won't be injected next turn.`);
+    return `retracted ${scope} — it won't be injected next turn.`;
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -673,36 +738,8 @@ export default function Home() {
         {/* Centre: Chat */}
         <div className="panel">
           <div className="panel-header">
-            Chat · private to {user}
+            {activeChat ? (chats.find((c) => c.chatId === activeChat)?.title || "New chat") : "Chat"}
             {openFile && <span className="badge">this → {openFile.split("/").pop()}</span>}
-          </div>
-          <div className="tabbar">
-            <div className="tabs">
-              {chats.map((c) => (
-                <div
-                  key={c.chatId}
-                  className={`tab ${c.chatId === activeChat ? "active" : ""}`}
-                  onClick={() => openChatMeta(c)}
-                  title={c.title}
-                >
-                  <span className="tab-title">{c.title || "New chat"}</span>
-                  {chats.length > 1 && (
-                    <button
-                      className="tab-x"
-                      title="close tab"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        closeChat(c);
-                      }}
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-            <button className="tab-new" title="start a new chat" onClick={newChat}>＋ New</button>
-            <button className="tab-clear" title="clear this chat" onClick={clearActiveChat}>Clear</button>
           </div>
           <div className="chat">
             <div className="messages">
@@ -725,7 +762,13 @@ export default function Home() {
                           <button className="xray-toggle" onClick={() => setXray((x) => ({ ...x, [i]: !x[i] }))}>
                             {xray[i] ? "▾ hide x-ray" : "▸ x-ray — what informed this answer"}
                           </button>
-                          {xray[i] && <Xray meta={m.meta} />}
+                          {xray[i] && (
+                            <Xray
+                              meta={m.meta}
+                              onFeedback={(v) => feedbackForMessage(m.meta!, v)}
+                              onRetract={retractInXray}
+                            />
+                          )}
                         </div>
                       )}
                     </>
@@ -784,119 +827,32 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Right: Glass box — what the agent saw (memory) and did (tools) */}
+        {/* Right: Chats — the user's conversation history (click an answer's ▸ x-ray for what informed it) */}
         <div className="panel">
-          <div className="panel-header">Glass box · what the agent saw &amp; did</div>
+          <div className="panel-header">Chats · private to {user}</div>
           <div className="panel-body">
-            {!context && trace.length === 0 && (
-              <>
-                <div className="empty">Nothing yet.</div>
-                <div className="hint">
-                  After each turn this shows the memory injected into the prompt (and what was dropped), the
-                  token budget, real cache savings, and every tool the agent used.
+            <button className="new-chat" onClick={newChat}>＋ New chat</button>
+            {chats.length === 0 && <div className="empty">No chats yet.</div>}
+            {[...chats].reverse().map((c) => (
+              <div
+                key={c.chatId}
+                className={`chat-row ${c.chatId === activeChat ? "active" : ""}`}
+                onClick={() => openChatMeta(c)}
+              >
+                <div className="chat-row-main">
+                  <div className="chat-row-title">{c.title || "New chat"}</div>
+                  {c.lastUserMessage && <div className="chat-row-sub">{c.lastUserMessage}</div>}
                 </div>
-              </>
-            )}
-
-            {context && (
-              <>
-                <div className="ctx-h">Memory injected ({context.injected.length})</div>
-                <div className="ctx-cap">
-                  Small facts the agent already knows, pushed into every prompt (not the files). 🔒 always-on =
-                  cached &amp; reused free · ↻ per-turn = re-ranked each turn.
+                <div className="chat-row-actions">
+                  <button title="rename" onClick={(e) => { e.stopPropagation(); renameChat(c); }}>✎</button>
+                  {chats.length > 1 && (
+                    <button title="delete" onClick={(e) => { e.stopPropagation(); closeChat(c); }}>🗑</button>
+                  )}
                 </div>
-                {context.injected.length === 0 && <div className="ctx-item muted">none in scope</div>}
-                {context.injected.map((m) => (
-                  <div key={m.id} className="mem-inj">
-                    <div className="mem-inj-top">
-                      <span className={`pill ${m.tier}`}>
-                        {m.tier === "stable" ? "🔒 always-on" : "↻ per-turn"}
-                      </span>
-                      <span className="mem-inj-scope">{m.scope}</span>
-                      <span className="mem-inj-tok" title="estimated size in tokens">~{m.tokens} tok</span>
-                      <button
-                        className="retract"
-                        title="stop injecting this memory (from next turn)"
-                        onClick={() => retract(m.scope, m.id)}
-                      >
-                        Retract
-                      </button>
-                    </div>
-                    <div className="mem-inj-text">“{m.text}”</div>
-                  </div>
-                ))}
-
-                {context.dropped.length > 0 && (
-                  <>
-                    <div className="ctx-h">Dropped ({context.dropped.length})</div>
-                    {context.dropped.map((d, i) => (
-                      <div key={i} className="ctx-item muted">
-                        {d.scope} — {d.reason.replace("stable", "always-on").replace("ranked", "per-turn")}
-                      </div>
-                    ))}
-                  </>
-                )}
-
-                {context.composition && context.composition.length > 0 && (() => {
-                  const parts = context.composition;
-                  const total = parts.reduce((s, p) => s + p.tokens, 0) || 1;
-                  return (
-                    <>
-                      <div className="ctx-h">Input composition (~{total}t, estimate)</div>
-                      <div className="tokbar">
-                        {parts.map((p, i) => (
-                          <div
-                            key={p.label}
-                            className="seg"
-                            style={{ width: `${(p.tokens / total) * 100}%`, background: COMP_COLORS[i % COMP_COLORS.length] }}
-                            title={`${p.label}: ~${p.tokens}t (${p.tier})`}
-                          />
-                        ))}
-                      </div>
-                      <div className="toklegend">
-                        {parts.map((p, i) => (
-                          <span key={p.label} className="legitem">
-                            <span className="swatch" style={{ background: COMP_COLORS[i % COMP_COLORS.length] }} />
-                            {p.tier === "cached" ? "🔒 " : ""}{p.label} ~{p.tokens}t
-                          </span>
-                        ))}
-                      </div>
-                      <div className="tokcap">🔒 cached prefix is reused for free next turn; the rest is re-sent every turn.</div>
-                    </>
-                  );
-                })()}
-
-                <div className="ctx-h">Token budget (estimate)</div>
-                <div className="ctx-item">
-                  always-on memory ~{context.stableTokens}/{context.budgets.stable} · per-turn ~
-                  {context.volatileTokens}/{context.budgets.ranked}
-                </div>
-
-                <div className="ctx-h">This turn · real tokens</div>
-                <div className="ctx-item">
-                  input {context.usage.input} · <b>cache-read {context.usage.cacheRead}</b> · cache-write{" "}
-                  {context.usage.cacheWrite} · output {context.usage.output}
-                </div>
-
-                <div className="ctx-h">Was this answer right?</div>
-                <div className="feedback">
-                  <button onClick={() => sendFeedback("good")}>👍 good</button>
-                  <button onClick={() => sendFeedback("bad")}>👎 off</button>
-                </div>
-                {feedbackNote && <div className="ctx-item muted">{feedbackNote}</div>}
-              </>
-            )}
-
-            {trace.length > 0 && (
-              <>
-                <div className="ctx-h">Tool calls ({trace.length})</div>
-                {trace.map((t, i) => (
-                  <div key={i} className="trace-item">
-                    <span className="trace-step">{i + 1}.</span>
-                    <code>{t.tool}</code> {t.summary}
-                  </div>
-                ))}
-              </>
+              </div>
+            ))}
+            {activeChat && (
+              <button className="clear-chat" onClick={clearActiveChat}>Clear current chat</button>
             )}
           </div>
         </div>

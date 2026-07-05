@@ -22,7 +22,7 @@ import path from "path";
 export type MessageMeta = {
   trace?: { tool: string; input: Record<string, unknown>; summary: string; result?: string }[];
   reasoning?: string;
-  injected?: { scope: string; tier: string; text: string }[];
+  injected?: { id: string; scope: string; type: string; tier: string; text: string }[];
   usage?: { input: number; cacheRead: number; cacheWrite: number; output: number };
   composition?: { label: string; tokens: number; tier: string }[];
 };
