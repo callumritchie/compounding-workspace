@@ -23,6 +23,7 @@ import { runAgent, SYSTEM_BASE, type AgentEvent } from "@/lib/agent";
 import { buildWorkingContext } from "@/lib/context";
 import { assembleContext, estimateTokens } from "@/lib/assemble";
 import { getMemoriesForContext } from "@/lib/memory";
+import { getProjectConfig } from "@/lib/project";
 import { TOOLS } from "@/lib/tools";
 import { listFiles, DEFAULT_PROJECT } from "@/lib/corpus";
 
@@ -50,7 +51,14 @@ export async function POST(req: Request) {
     .filter((c) => c.chatId !== chatId)
     .map((c) => ({ title: c.title, openFile: c.openFile, lastActivity: c.lastUserMessage }));
 
-  const workingContext = buildWorkingContext({ projectId: project, openFile, recentActions, otherTabs });
+  const projectCfg = await getProjectConfig(project);
+  const workingContext = buildWorkingContext({
+    projectId: project,
+    openFile,
+    recentActions,
+    otherTabs,
+    stakeholders: projectCfg.stakeholders,
+  });
 
   // Assemble memory (labelled, split into cache-stable + query-ranked tiers).
   const memories = await getMemoriesForContext(user, project);
@@ -68,7 +76,13 @@ export async function POST(req: Request) {
     { label: "Current message", tokens: estimateTokens(message), tier: "volatile" },
   ].filter((s) => s.tokens > 0);
 
-  const injected = assembled.report.injected.map((m) => ({ scope: m.scope, tier: m.tier, text: m.text }));
+  const injected = assembled.report.injected.map((m) => ({
+    id: m.id,
+    scope: m.scope,
+    type: m.type,
+    tier: m.tier,
+    text: m.text,
+  }));
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({

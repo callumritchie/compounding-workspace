@@ -4,5 +4,9 @@
   "client": "acme",
   "sector": "healthcare",
   "type": "strategy",
-  "status": "in-progress"
+  "status": "in-progress",
+  "stakeholders": [
+    { "id": "acme-cfo", "name": "Jane Okafor", "role": "CFO" },
+    { "id": "acme-cmo", "name": "Raj Patel", "role": "Chief Medical Officer" }
+  ]
 }

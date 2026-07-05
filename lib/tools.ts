@@ -69,15 +69,19 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "save_memory",
     description:
-      "Save a durable fact or lesson to MEMORY so it is remembered in future conversations (unlike a file, this is pushed into every prompt). Use for stable preferences, client facts, or lessons learned — not one-off details. Choose scope: 'personal' (only this user) or 'project' (shared on this project).",
+      "Save a durable fact or lesson to MEMORY so it is remembered in future conversations (unlike a file, this is pushed into every prompt). Use for stable preferences, client facts, lessons learned, or facts about a specific stakeholder — not one-off details. Choose scope: 'personal' (only this user), 'project' (shared on this project), or 'stakeholder' (a fact about a specific person that should follow them onto their OTHER projects too — set `stakeholder` to their id from the working context).",
     input_schema: {
       type: "object",
       properties: {
         fact: { type: "string", description: "The fact or lesson, in one or two sentences" },
         scope: {
           type: "string",
-          enum: ["personal", "project"],
-          description: "personal = remembered for this user; project = shared with everyone on this project",
+          enum: ["personal", "project", "stakeholder"],
+          description: "personal = remembered for this user; project = shared with everyone on this project; stakeholder = tied to a specific person (follows them across projects)",
+        },
+        stakeholder: {
+          type: "string",
+          description: "Required when scope is 'stakeholder': the stakeholder's id, exactly as listed in the working context (e.g. 'acme-cfo').",
         },
       },
       required: ["fact", "scope"],
@@ -181,6 +185,26 @@ export async function executeTool(
             provenance: { origin_user: user, origin_project: projectId, created: new Date().toISOString().slice(0, 10) },
           });
           return { result: `Saved to your personal memory.`, summary: `remembered → ${scope}` };
+        }
+        if (input.scope === "stakeholder") {
+          // A fact about a specific person → propose it under stakeholder/<id>
+          // so, once approved, it follows them onto their OTHER projects too.
+          const cfg = await getProjectConfig(projectId);
+          const id = String(input.stakeholder ?? "").trim();
+          const person = cfg.stakeholders.find((s) => s.id === id);
+          if (!person) {
+            const known = cfg.stakeholders.map((s) => s.id).join(", ") || "none listed";
+            return {
+              result: `Unknown stakeholder id "${id}". Use one of the ids in the working context (${known}), or save this as project scope instead.`,
+              summary: `stakeholder id not found: ${id || "(blank)"}`,
+            };
+          }
+          const scope = `stakeholder/${person.id}`;
+          await addProposal({ fact, scope, proposedBy: user, sourceProject: projectId });
+          return {
+            result: `Suggested as a memory about ${person.name} (${person.role}) — saved only if the user approves; it will then follow ${person.name} across their projects.`,
+            summary: `suggested stakeholder memory → ${scope} (awaiting approval)`,
+          };
         }
         // Project/shared memory changes the TEAM's brain → suggest it for the
         // user's approval instead of saving silently.

@@ -177,19 +177,21 @@ html, body {
 .toklegend .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; flex: none; }
 .tokcap { font-size: 11px; color: var(--muted); }
 
-/* Chat tabs */
-.tabbar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--border); flex: none; }
-.tabbar .tabs { display: flex; align-items: center; gap: 4px; overflow-x: auto; flex: 1 1 auto; min-width: 0; }
-.tabbar .tab { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px 6px 0 0; background: var(--panel); cursor: pointer; font-size: 12px; max-width: 160px; white-space: nowrap; flex: none; }
-.tabbar .tab.active { background: var(--bg); border-bottom-color: var(--bg); font-weight: 600; }
-.tabbar .tab-title { overflow: hidden; text-overflow: ellipsis; }
-.tabbar .tab-x { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0; }
-.tabbar .tab-x:hover { color: var(--danger, #ef4444); }
-/* New/Clear live OUTSIDE the scrollable .tabs, so they stay visible however many tabs there are */
-.tabbar .tab-new, .tabbar .tab-clear { flex: none; border: 1px solid var(--border); background: var(--panel); border-radius: 6px; cursor: pointer; line-height: 1; padding: 4px 8px; white-space: nowrap; }
-.tabbar .tab-new { font-size: 12px; font-weight: 600; }
-.tabbar .tab-clear { font-size: 12px; color: var(--muted); }
-.tabbar .tab-new:hover, .tabbar .tab-clear:hover { background: var(--bg); }
+/* Chats sidebar (right panel) */
+.new-chat { width: 100%; border: 1px solid var(--border); background: var(--panel); border-radius: 8px; padding: 8px; cursor: pointer; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.new-chat:hover { background: var(--bg); }
+.chat-row { display: flex; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
+.chat-row:hover { background: var(--panel); }
+.chat-row.active { background: var(--accent-soft); border-color: var(--border); }
+.chat-row-main { flex: 1 1 auto; min-width: 0; }
+.chat-row-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-row-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.chat-row-actions { display: flex; gap: 2px; flex: none; opacity: 0; }
+.chat-row:hover .chat-row-actions, .chat-row.active .chat-row-actions { opacity: 1; }
+.chat-row-actions button { border: none; background: transparent; cursor: pointer; font-size: 12px; padding: 2px 4px; border-radius: 4px; }
+.chat-row-actions button:hover { background: var(--bg); }
+.clear-chat { width: 100%; margin-top: 8px; border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 8px; padding: 6px; cursor: pointer; font-size: 12px; }
+.clear-chat:hover { background: var(--panel); }
 
 /* Live "watch it work" view (streaming) */
 .live { display: flex; flex-direction: column; gap: 4px; }
@@ -217,10 +219,16 @@ html, body {
 .mem-chip button:hover { opacity: 0.75; }
 
 /* Memory manager (modal) */
-.mem-group { margin-bottom: 14px; }
+/* Lattice-level sections in the memory manager */
+.mem-level { margin-bottom: 18px; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 4px; background: var(--panel); }
+.mem-level-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.mem-level-name { font-weight: 700; font-size: 13px; letter-spacing: 0.02em; text-transform: uppercase; color: var(--accent); }
+.mem-level-gloss { font-size: 12px; color: var(--muted); flex: 1 1 auto; }
+.mem-level-count { font-size: 12px; color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
 .mem-card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--bg); }
 .mem-card.retracted { opacity: 0.55; }
 .mem-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 12px; }
+.mem-meta .mem-scope { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 6px; }
 .mem-meta .mem-id { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 11px; margin-left: auto; }
 .pill.conf { background: #fde68a; color: #92400e; }
 .pill.ret { background: #fecaca; color: #991b1b; }
@@ -261,6 +269,16 @@ html, body {
   padding: 0 16px; cursor: pointer; font-weight: 600;
 }
 .composer button:disabled { opacity: 0.5; cursor: default; }
+/* Secondary composer action: inline retrieval comparison */
+.composer button.compare-btn { background: var(--panel); color: var(--ink); border: 1px solid var(--border); font-weight: 600; white-space: nowrap; }
+.composer button.compare-btn:hover:not(:disabled) { background: var(--bg); }
+/* Inline "compare retrieval" card, shown in the thread */
+.inline-compare { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--bg); }
+.ic-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.ic-x { border: none; background: transparent; cursor: pointer; font-size: 16px; line-height: 1; color: var(--muted); padding: 0 4px; }
+.ic-x:hover { color: var(--ink); }
+.ic-q { font-size: 13px; font-weight: 600; margin: 6px 0 2px; }
+.inline-compare .compare-grid { grid-template-columns: 1fr; gap: 10px; margin-top: 10px; }
 
 /* ---- File list, viewer & glass-box ---- */
 .upload {

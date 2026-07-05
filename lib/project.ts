@@ -12,6 +12,11 @@ import path from "path";
 
 export type ProjectStatus = "in-progress" | "complete";
 
+// A person involved in the engagement. The same stakeholder id can appear on
+// several projects (even for different clients) — that's what lets a memory
+// about a person follow them across engagements (the `stakeholder/<id>` scope).
+export type Stakeholder = { id: string; name: string; role: string };
+
 export type ProjectConfig = {
   id: string;
   name: string; // human label, e.g. "Growth strategy"
@@ -19,6 +24,7 @@ export type ProjectConfig = {
   sector: string; // e.g. healthcare
   type: string; // e.g. strategy, diligence
   status: ProjectStatus; // in-progress | complete — a client can have several
+  stakeholders: Stakeholder[]; // people on this project (drive the stakeholder scope)
 };
 
 export async function getProjectConfig(projectId: string): Promise<ProjectConfig> {
@@ -32,10 +38,13 @@ export async function getProjectConfig(projectId: string): Promise<ProjectConfig
       sector: cfg.sector ?? "unknown",
       type: cfg.type ?? "unknown",
       status: cfg.status === "complete" ? "complete" : "in-progress",
+      stakeholders: Array.isArray(cfg.stakeholders)
+        ? cfg.stakeholders.filter((s): s is Stakeholder => !!s && typeof s.id === "string")
+        : [],
     };
   } catch {
     // Sensible default if a project has no config file yet.
-    return { id: projectId, name: projectId, client: projectId, sector: "unknown", type: "unknown", status: "in-progress" };
+    return { id: projectId, name: projectId, client: projectId, sector: "unknown", type: "unknown", status: "in-progress", stakeholders: [] };
   }
 }
 

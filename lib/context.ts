@@ -11,6 +11,7 @@
 --------------------------------------------------------------------------- */
 
 export type OtherTab = { title: string; openFile?: string | null; lastActivity?: string };
+export type StakeholderRef = { id: string; name: string; role: string };
 
 export type WorkingContext = {
   projectId: string;
@@ -19,6 +20,9 @@ export type WorkingContext = {
   // What the SAME user is doing in their OTHER open chat tabs (parallel tasks).
   // Compact by design — a title + open file + last message, never full history.
   otherTabs?: OtherTab[];
+  // People on this project. Listed so the agent knows who's involved and can
+  // save a memory to a specific stakeholder (save_memory scope "stakeholder").
+  stakeholders?: StakeholderRef[];
 };
 
 export function buildWorkingContext(wc: WorkingContext): string {
@@ -30,6 +34,14 @@ export function buildWorkingContext(wc: WorkingContext): string {
   // Keep only the last few actions so this block stays small.
   const actions = (wc.recentActions ?? []).slice(-6);
   if (actions.length) lines.push(`- Recent actions: ${actions.join("; ")}`);
+
+  // Who's on this project. If the user tells you a durable fact about one of
+  // these people, save it with save_memory scope "stakeholder" + their id — it
+  // will then follow that person onto their other projects too.
+  const stakeholders = wc.stakeholders ?? [];
+  if (stakeholders.length) {
+    lines.push(`- Stakeholders on this project: ${stakeholders.map((s) => `${s.name} (${s.role}) [id: ${s.id}]`).join("; ")}`);
+  }
 
   // Cross-tab awareness: let this chat know what the user's other tabs are for,
   // so it can coordinate ("your other tab is drafting the CFO memo") without
