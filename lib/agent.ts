@@ -40,16 +40,24 @@ you remember it next time. Be concise, direct, and practical.`;
 // The SDK reads ANTHROPIC_API_KEY from the environment (including .env.local).
 const client = new Anthropic();
 
-// What the agent returns: the final answer, plus a trace of the tools it used
-// (so the glass-box panel can show its work).
-// Token usage, summed across every model call in one turn (the tool loop can
-// call the model several times). Lets the glass box show cost + caching.
-export type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
-export type AgentResult = { text: string; trace: TraceEntry[]; usage: Usage };
+// Streaming events emitted as the agent works (for the live view).
+export type AgentEvent =
+  | { type: "step"; n: number }
+  | { type: "thinking"; text: string }
+  | { type: "text"; text: string }
+  | { type: "tool"; name: string; input: Record<string, unknown>; summary: string };
 
-export async function respond(
+// What the agent returns: the final answer, a trace of the tools it used, token
+// usage (summed across every model call in the turn), and the reasoning summary.
+export type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
+export type AgentResult = { text: string; trace: TraceEntry[]; usage: Usage; reasoning: string };
+
+// The agent loop. Streams as it goes: pass `onEvent` to receive thinking / tool /
+// text events live; omit it to just run to completion (used by the eval + compare).
+export async function runAgent(
   messages: Message[],
-  opts: { projectId: string; user: string; stableBlock?: string; volatileBlock?: string }
+  opts: { projectId: string; user: string; stableBlock?: string; volatileBlock?: string },
+  onEvent?: (ev: AgentEvent) => void
 ): Promise<AgentResult> {
   // Order the prompt stable → volatile. The stable block (persona + constitution
   // + high-importance memory) sits behind a cache breakpoint; the volatile block
@@ -65,12 +73,15 @@ export async function respond(
   const convo: Anthropic.MessageParam[] = messages.map((m) => ({ role: m.role, content: m.content }));
   const trace: TraceEntry[] = [];
   const usage: Usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+  let reasoning = "";
 
   // Safety cap: never loop more than this many model calls in one turn.
   for (let step = 0; step < 8; step++) {
+    onEvent?.({ type: "step", n: step });
     let response: Anthropic.Message;
     try {
-      response = await client.messages.create({
+      // Stream the model call so we can surface thinking + answer text live.
+      const stream = client.messages.stream({
         model: MODEL,
         max_tokens: 4096,
         thinking: { type: "adaptive" }, // let the model think as much as the task needs
@@ -78,6 +89,21 @@ export async function respond(
         tools: TOOLS,
         messages: convo,
       });
+      for await (const event of stream) {
+        if (event.type === "content_block_delta") {
+          if (event.delta.type === "thinking_delta") {
+            onEvent?.({ type: "thinking", text: event.delta.thinking }); // live view
+          } else if (event.delta.type === "text_delta") {
+            onEvent?.({ type: "text", text: event.delta.text });
+          }
+        }
+      }
+      response = await stream.finalMessage();
+      // Capture reasoning from the authoritative final message (thinking blocks),
+      // so the X-ray has it even when thinking isn't streamed as deltas.
+      for (const b of response.content) {
+        if (b.type === "thinking") reasoning += b.thinking;
+      }
     } catch (err) {
       if (err instanceof Anthropic.AuthenticationError) {
         throw new Error(
@@ -104,12 +130,21 @@ export async function respond(
         .filter((b): b is Anthropic.TextBlock => b.type === "text")
         .map((b) => b.text)
         .join("");
-      return { text: text || "(no response)", trace, usage };
+      return { text: text || "(no response)", trace, usage, reasoning };
     }
 
     // Append the model's turn EXACTLY as received (keeps thinking + tool_use
     // blocks intact — the API requires this when tools are used).
     convo.push({ role: "assistant", content: response.content });
+
+    // Intermediate text (the model narrating its plan before calling a tool) is
+    // useful "reasoning" for the X-ray, even when thinking text isn't exposed.
+    const narration = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("")
+      .trim();
+    if (narration) reasoning += (reasoning ? "\n\n" : "") + narration;
 
     // Run every tool the model asked for and collect the results.
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
@@ -120,13 +155,22 @@ export async function respond(
         tu.name,
         input
       );
-      trace.push({ tool: tu.name, input, summary });
+      trace.push({ tool: tu.name, input, summary, result: result.slice(0, 300) });
+      onEvent?.({ type: "tool", name: tu.name, input, summary });
       toolResults.push({ type: "tool_result", tool_use_id: tu.id, content: result });
     }
     convo.push({ role: "user", content: toolResults });
   }
 
-  return { text: "(stopped after too many tool steps)", trace, usage };
+  return { text: "(stopped after too many tool steps)", trace, usage, reasoning };
+}
+
+// Non-streaming wrapper — used by the eval harness and /api/compare.
+export async function respond(
+  messages: Message[],
+  opts: { projectId: string; user: string; stableBlock?: string; volatileBlock?: string }
+): Promise<AgentResult> {
+  return runAgent(messages, opts);
 }
 
 // Abstraction step used at promotion time: turn a project-specific lesson into a

@@ -17,8 +17,18 @@
 import { promises as fs } from "fs";
 import path from "path";
 
-// A single chat turn. Kept intentionally minimal.
-export type Message = { role: "user" | "assistant"; content: string };
+// Per-assistant-message "X-ray": everything that produced the answer, stored
+// with the message so it can be inspected later (persists across reloads).
+export type MessageMeta = {
+  trace?: { tool: string; input: Record<string, unknown>; summary: string; result?: string }[];
+  reasoning?: string;
+  injected?: { scope: string; tier: string; text: string }[];
+  usage?: { input: number; cacheRead: number; cacheWrite: number; output: number };
+  composition?: { label: string; tokens: number; tier: string }[];
+};
+
+// A single chat turn. `meta` is set on assistant turns for the X-ray view.
+export type Message = { role: "user" | "assistant"; content: string; meta?: MessageMeta };
 
 // One tab's metadata (the messages themselves live in <chatId>.json).
 export type ChatMeta = {

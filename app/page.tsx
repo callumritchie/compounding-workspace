@@ -16,9 +16,17 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-type Message = { role: "user" | "assistant"; content: string };
+type TraceEntry = { tool: string; input: Record<string, unknown>; summary: string; result?: string };
+type InjectedLite = { scope: string; tier: string; text: string };
+type MessageMeta = {
+  trace?: TraceEntry[];
+  reasoning?: string;
+  injected?: InjectedLite[];
+  usage?: Usage;
+  composition?: CompPart[];
+};
+type Message = { role: "user" | "assistant"; content: string; meta?: MessageMeta };
 type User = "alice" | "bob";
-type TraceEntry = { tool: string; input: Record<string, unknown>; summary: string };
 type Injected = { id: string; scope: string; type: string; tier: string; tokens: number; text: string };
 type Dropped = { id: string; scope: string; reason: string };
 type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
@@ -32,6 +40,58 @@ type ContextReport = {
   usage: Usage;
   composition?: CompPart[];
 };
+
+// The per-message "X-ray": what informed a given answer (stored on the message).
+function Xray({ meta }: { meta: MessageMeta }) {
+  return (
+    <div className="xray">
+      {meta.reasoning ? (
+        <>
+          <div className="xray-h">💡 reasoning</div>
+          <div className="xray-reason">{meta.reasoning}</div>
+        </>
+      ) : null}
+      {meta.trace && meta.trace.length > 0 && (
+        <>
+          <div className="xray-h">🔧 tools used ({meta.trace.length})</div>
+          {meta.trace.map((t, i) => (
+            <div key={i} className="xray-tool">
+              <div className="xray-tool-sum">{t.summary}</div>
+              {t.result && (
+                <div className="xray-tool-res">
+                  {t.result}
+                  {t.result.length >= 300 ? "…" : ""}
+                </div>
+              )}
+            </div>
+          ))}
+        </>
+      )}
+      {meta.injected && meta.injected.length > 0 && (
+        <>
+          <div className="xray-h">🧠 memory used ({meta.injected.length})</div>
+          {meta.injected.map((m, i) => (
+            <div key={i} className="xray-mem">
+              <div>
+                <span className={`pill ${m.tier}`}>{m.tier === "stable" ? "🔒 always-on" : "↻ per-turn"}</span>{" "}
+                <span className="mem-inj-scope">{m.scope}</span>
+              </div>
+              <div className="mem-inj-text">“{m.text}”</div>
+            </div>
+          ))}
+        </>
+      )}
+      {meta.usage && (
+        <>
+          <div className="xray-h">tokens</div>
+          <div className="ctx-item">
+            input {meta.usage.input} · cache-read {meta.usage.cacheRead} · output {meta.usage.output}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 // Fixed palette so each input-composition segment keeps the same colour
 // between the bar and its legend.
@@ -89,6 +149,10 @@ export default function Home() {
   const [activeChat, setActiveChat] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [liveSteps, setLiveSteps] = useState<string[]>([]); // tool steps as they happen
+  const [liveReasoning, setLiveReasoning] = useState(""); // streamed thinking
+  const [liveText, setLiveText] = useState(""); // streamed answer so far
+  const [xray, setXray] = useState<Record<number, boolean>>({}); // which messages are expanded
 
   const [files, setFiles] = useState<string[]>([]);
   const [openFile, setOpenFile] = useState<string | null>(null);
@@ -411,6 +475,18 @@ export default function Home() {
     }
   }
 
+  // Turn a tool event into a friendly step line for the live view.
+  function toolStepLabel(name: string, summary: string): string {
+    const icon =
+      name === "read_file" ? "📄" :
+      name === "search_files" || name === "semantic_search" ? "🔍" :
+      name === "list_files" ? "🗂️" :
+      name === "write_file" ? "✍️" :
+      name === "save_memory" ? "🧠" :
+      name === "nominate_for_promotion" || name === "note_signal" ? "⬆️" : "🔧";
+    return `${icon} ${summary}`;
+  }
+
   async function send() {
     const text = input.trim();
     if (!text || loading || !activeChat) return;
@@ -419,6 +495,9 @@ export default function Home() {
     setInput("");
     setLoading(true);
     setFeedbackNote(null);
+    setLiveSteps([]);
+    setLiveReasoning("");
+    setLiveText("");
 
     try {
       const res = await fetch("/api/chat", {
@@ -426,25 +505,61 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user, message: text, project, openFile, recentActions, chatId: activeChat }),
       });
-      const data = await res.json();
-      if (data.history) {
-        setMessages(data.history);
-        setTrace(data.trace ?? []);
-        setContext(data.context ?? null);
-        if (data.files) setFiles(data.files);
-        loadPromotions(); // the agent may have nominated a lesson this turn
-        loadSignals(); // ...or logged a recurring signal
-        loadProposals(); // ...or suggested a shared memory to approve
-        refreshChats(); // the tab's title + last-activity may have changed
-        noteAction(`asked "${text.slice(0, 40)}${text.length > 40 ? "…" : ""}"`);
-      } else {
-        setMessages((m) => [...m, { role: "assistant", content: `⚠️ ${data.error}` }]);
+      if (!res.body) throw new Error("no response stream");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let answer = "";
+      let done = false;
+
+      while (!done) {
+        const { value, done: streamDone } = await reader.read();
+        if (streamDone) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? ""; // keep the trailing partial frame
+        for (const frame of frames) {
+          const line = frame.replace(/^data: /, "").trim();
+          if (!line) continue;
+          let ev: Record<string, unknown>;
+          try {
+            ev = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (ev.type === "thinking") {
+            setLiveReasoning((r) => (r + String(ev.text)).slice(-600));
+          } else if (ev.type === "tool") {
+            setLiveSteps((s) => [...s, toolStepLabel(String(ev.name), String(ev.summary))]);
+          } else if (ev.type === "text") {
+            answer += String(ev.text);
+            setLiveText(answer);
+          } else if (ev.type === "done") {
+            setMessages((ev.history as Message[]) ?? []);
+            setTrace((ev.trace as TraceEntry[]) ?? []);
+            setContext((ev.context as ContextReport) ?? null);
+            if (ev.files) setFiles(ev.files as string[]);
+            loadPromotions(); // the agent may have nominated a lesson this turn
+            loadSignals(); // ...or logged a recurring signal
+            loadProposals(); // ...or suggested a shared memory to approve
+            refreshChats(); // the tab's title + last-activity may have changed
+            noteAction(`asked "${text.slice(0, 40)}${text.length > 40 ? "…" : ""}"`);
+            done = true;
+          } else if (ev.type === "error") {
+            setMessages((m) => [...m, { role: "assistant", content: `⚠️ ${String(ev.error)}` }]);
+            done = true;
+          }
+        }
       }
     } catch (err) {
       const detail = err instanceof Error ? err.message : "network error";
       setMessages((m) => [...m, { role: "assistant", content: `⚠️ ${detail}` }]);
     } finally {
       setLoading(false);
+      setLiveSteps([]);
+      setLiveReasoning("");
+      setLiveText("");
     }
   }
 
@@ -601,9 +716,19 @@ export default function Home() {
                 <div key={i} className={`msg ${m.role}`}>
                   <div className="role">{m.role === "user" ? user : "agent"}</div>
                   {m.role === "assistant" ? (
-                    <div className="markdown">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
-                    </div>
+                    <>
+                      <div className="markdown">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                      </div>
+                      {m.meta && (
+                        <div className="xray-wrap">
+                          <button className="xray-toggle" onClick={() => setXray((x) => ({ ...x, [i]: !x[i] }))}>
+                            {xray[i] ? "▾ hide x-ray" : "▸ x-ray — what informed this answer"}
+                          </button>
+                          {xray[i] && <Xray meta={m.meta} />}
+                        </div>
+                      )}
+                    </>
                   ) : (
                     m.content
                   )}
@@ -630,7 +755,19 @@ export default function Home() {
               {loading && (
                 <div className="msg assistant">
                   <div className="role">agent</div>
-                  <span className="hint">thinking &amp; reading files…</span>
+                  <div className="live">
+                    {liveReasoning && <div className="live-think">💭 {liveReasoning}</div>}
+                    {liveSteps.map((s, i) => (
+                      <div key={i} className="live-step">{s}</div>
+                    ))}
+                    {liveText ? (
+                      <div className="markdown">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{liveText}</ReactMarkdown>
+                      </div>
+                    ) : (
+                      !liveReasoning && liveSteps.length === 0 && <span className="hint">thinking…</span>
+                    )}
+                  </div>
                 </div>
               )}
               <div ref={messagesEndRef} />

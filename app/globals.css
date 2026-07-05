@@ -191,6 +191,24 @@ html, body {
 .tabbar .tab-clear { font-size: 12px; color: var(--muted); }
 .tabbar .tab-new:hover, .tabbar .tab-clear:hover { background: var(--bg); }
 
+/* Live "watch it work" view (streaming) */
+.live { display: flex; flex-direction: column; gap: 4px; }
+.live-think { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.4; }
+.live-step { font-size: 12px; line-height: 1.5; }
+
+/* Per-message X-ray */
+.xray-wrap { margin-top: 4px; }
+.xray-toggle { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; padding: 2px 0; }
+.xray-toggle:hover { color: var(--accent); }
+.xray { margin-top: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.xray-h { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); margin: 8px 0 3px; }
+.xray-h:first-child { margin-top: 0; }
+.xray-reason { font-size: 12px; line-height: 1.5; white-space: pre-wrap; color: var(--fg); }
+.xray-tool { margin: 3px 0; }
+.xray-tool-sum { font-size: 12px; }
+.xray-tool-res { font-size: 11px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; white-space: pre-wrap; margin-top: 1px; padding-left: 8px; border-left: 2px solid var(--border); }
+.xray-mem { margin: 4px 0; }
+
 /* Memory-awareness chips (in chat) */
 .mem-chip { align-self: flex-start; max-width: 80%; font-size: 12px; padding: 5px 10px; border-radius: 8px; margin: 1px 0; display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .mem-chip.saved { background: var(--accent-soft); border: 1px solid var(--border); }

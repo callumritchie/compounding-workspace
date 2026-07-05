@@ -122,7 +122,9 @@ export const TOOLS: Anthropic.Tool[] = [
 ];
 
 // One record of a tool the agent invoked — used to show the "glass box" trace.
-export type TraceEntry = { tool: string; input: Record<string, unknown>; summary: string };
+// `result` is a short preview of what the tool returned (e.g. retrieved passages),
+// shown in the per-message X-ray.
+export type TraceEntry = { tool: string; input: Record<string, unknown>; summary: string; result?: string };
 
 // Who/what the tools act on. save_memory needs the user (for personal scope).
 export type ToolContext = { projectId: string; user: string };

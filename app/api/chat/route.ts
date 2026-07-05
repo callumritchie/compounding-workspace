@@ -1,12 +1,14 @@
-/* POST /api/chat  { user, message, project?, openFile?, recentActions? }
-   → runs one agentic chat turn for that user.
+/* POST /api/chat  { user, message, project?, openFile?, recentActions?, chatId }
+   → runs one agentic chat turn and STREAMS it back as Server-Sent Events.
 
-   Steps:
-     1. load the user's PRIVATE history, append their message
-     2. assemble WORKING CONTEXT (open file + recent actions)
-     3. run the agent loop (it may read/search/write shared files)
-     4. save history; return updated history + the tool trace + the file list
-        (the list may have changed if the agent wrote a file)
+   Events: {type:"step"} · {type:"thinking",text} · {type:"tool",name,input,summary}
+           · {type:"text",text} · {type:"done", history, trace, files, context}
+           · {type:"error", error}
+
+   The final `done` event carries the same payload the non-streaming version used
+   to return, so the client can reconcile once the turn completes. Each assistant
+   message is saved with a `meta` block (trace, reasoning, injected memory, usage,
+   composition) for the per-message X-ray.
 */
 
 import {
@@ -17,7 +19,7 @@ import {
   isUser,
   type Message,
 } from "@/lib/workspace";
-import { respond, SYSTEM_BASE } from "@/lib/agent";
+import { runAgent, SYSTEM_BASE, type AgentEvent } from "@/lib/agent";
 import { buildWorkingContext } from "@/lib/context";
 import { assembleContext, estimateTokens } from "@/lib/assemble";
 import { getMemoriesForContext } from "@/lib/memory";
@@ -33,7 +35,6 @@ export async function POST(req: Request) {
   const recentActions: string[] = Array.isArray(body?.recentActions)
     ? body.recentActions.filter((x: unknown): x is string => typeof x === "string")
     : [];
-
   const chatId: string | null = typeof body?.chatId === "string" ? body.chatId : null;
 
   if (!isUser(user)) return Response.json({ error: "unknown user" }, { status: 400 });
@@ -51,15 +52,11 @@ export async function POST(req: Request) {
 
   const workingContext = buildWorkingContext({ projectId: project, openFile, recentActions, otherTabs });
 
-  // Assemble memory (labelled, split into cache-stable + query-ranked tiers,
-  // budgeted) for THIS user + project — see lib/assemble.ts.
+  // Assemble memory (labelled, split into cache-stable + query-ranked tiers).
   const memories = await getMemoriesForContext(user, project);
   const assembled = assembleContext(memories, workingContext);
 
-  // Break the input prompt into its parts so the glass box can VISUALISE what
-  // fills the context window. The first three parts sit behind the cache
-  // breakpoint (reused free next turn); the rest are re-sent every turn.
-  // (history here excludes the just-added user message, which is its own part.)
+  // Break the input prompt into parts for the composition bar.
   const priorHistory = history.slice(0, -1).map((m) => m.content).join("\n");
   const composition = [
     { label: "Persona", tokens: estimateTokens(SYSTEM_BASE), tier: "cached" },
@@ -71,38 +68,53 @@ export async function POST(req: Request) {
     { label: "Current message", tokens: estimateTokens(message), tier: "volatile" },
   ].filter((s) => s.tokens > 0);
 
-  let text: string;
-  let trace;
-  let usage;
-  try {
-    ({ text, trace, usage } = await respond(history, {
-      projectId: project,
-      user,
-      stableBlock: assembled.stableBlock,
-      volatileBlock: assembled.volatileBlock,
-    }));
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : "unknown error";
-    return Response.json({ error: detail }, { status: 500 });
-  }
+  const injected = assembled.report.injected.map((m) => ({ scope: m.scope, tier: m.tier, text: m.text }));
 
-  const assistantMessage: Message = { role: "assistant", content: text };
-  history.push(assistantMessage);
-  await saveChatHistory(user, chatId, history);
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      try {
+        const result = await runAgent(
+          history,
+          { projectId: project, user, stableBlock: assembled.stableBlock, volatileBlock: assembled.volatileBlock },
+          (ev: AgentEvent) => send(ev)
+        );
 
-  // Update this tab's metadata: auto-title from the first message, and record
-  // the last message + open file so other tabs can see what it's working on.
-  const currentMeta = allChats.find((c) => c.chatId === chatId);
-  const hasTitle = currentMeta?.title && currentMeta.title !== "New chat";
-  const title = hasTitle ? currentMeta!.title : message.slice(0, 40);
-  await updateChatMeta(user, chatId, {
-    title,
-    lastUserMessage: message,
-    openFile,
-    updated: new Date().toISOString(),
+        const meta = {
+          trace: result.trace,
+          reasoning: result.reasoning,
+          injected,
+          usage: result.usage,
+          composition,
+        };
+        const assistantMessage: Message = { role: "assistant", content: result.text, meta };
+        history.push(assistantMessage);
+        await saveChatHistory(user, chatId, history);
+
+        // Update this tab's metadata (auto-title, last message, open file).
+        const currentMeta = allChats.find((c) => c.chatId === chatId);
+        const hasTitle = currentMeta?.title && currentMeta.title !== "New chat";
+        const title = hasTitle ? currentMeta!.title : message.slice(0, 40);
+        await updateChatMeta(user, chatId, { title, lastUserMessage: message, openFile, updated: new Date().toISOString() });
+
+        const files = await listFiles(project);
+        const context = { ...assembled.report, usage: result.usage, composition };
+        send({ type: "done", history, trace: result.trace, files, context });
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "unknown error";
+        send({ type: "error", error: detail });
+      } finally {
+        controller.close();
+      }
+    },
   });
 
-  const files = await listFiles(project);
-  const context = { ...assembled.report, usage, composition };
-  return Response.json({ history, trace, files, context });
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
+  });
 }
