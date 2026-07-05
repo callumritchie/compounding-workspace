@@ -19,7 +19,7 @@ import remarkGfm from "remark-gfm";
 type Message = { role: "user" | "assistant"; content: string };
 type User = "alice" | "bob";
 type TraceEntry = { tool: string; input: Record<string, unknown>; summary: string };
-type Injected = { id: string; scope: string; type: string; tier: string; tokens: number };
+type Injected = { id: string; scope: string; type: string; tier: string; tokens: number; text: string };
 type Dropped = { id: string; scope: string; reason: string };
 type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
 type CompPart = { label: string; tokens: number; tier: string };
@@ -595,15 +595,28 @@ export default function Home() {
             {context && (
               <>
                 <div className="ctx-h">Memory injected ({context.injected.length})</div>
+                <div className="ctx-cap">
+                  Small facts the agent already knows, pushed into every prompt (not the files). 🔒 always-on =
+                  cached &amp; reused free · ↻ per-turn = re-ranked each turn.
+                </div>
                 {context.injected.length === 0 && <div className="ctx-item muted">none in scope</div>}
                 {context.injected.map((m) => (
-                  <div key={m.id} className="ctx-item ctx-row">
-                    <span>
-                      <span className={`pill ${m.tier}`}>{m.tier}</span> {m.scope} · {m.type} · ~{m.tokens}t
-                    </span>
-                    <button className="retract" title="retract this memory" onClick={() => retract(m.scope, m.id)}>
-                      ✕
-                    </button>
+                  <div key={m.id} className="mem-inj">
+                    <div className="mem-inj-top">
+                      <span className={`pill ${m.tier}`}>
+                        {m.tier === "stable" ? "🔒 always-on" : "↻ per-turn"}
+                      </span>
+                      <span className="mem-inj-scope">{m.scope}</span>
+                      <span className="mem-inj-tok" title="estimated size in tokens">~{m.tokens} tok</span>
+                      <button
+                        className="retract"
+                        title="stop injecting this memory (from next turn)"
+                        onClick={() => retract(m.scope, m.id)}
+                      >
+                        Retract
+                      </button>
+                    </div>
+                    <div className="mem-inj-text">“{m.text}”</div>
                   </div>
                 ))}
 
@@ -611,7 +624,9 @@ export default function Home() {
                   <>
                     <div className="ctx-h">Dropped ({context.dropped.length})</div>
                     {context.dropped.map((d, i) => (
-                      <div key={i} className="ctx-item muted">{d.scope} — {d.reason}</div>
+                      <div key={i} className="ctx-item muted">
+                        {d.scope} — {d.reason.replace("stable", "always-on").replace("ranked", "per-turn")}
+                      </div>
                     ))}
                   </>
                 )}
@@ -647,7 +662,7 @@ export default function Home() {
 
                 <div className="ctx-h">Token budget (estimate)</div>
                 <div className="ctx-item">
-                  stable ~{context.stableTokens}/{context.budgets.stable} · ranked+working ~
+                  always-on memory ~{context.stableTokens}/{context.budgets.stable} · per-turn ~
                   {context.volatileTokens}/{context.budgets.ranked}
                 </div>
 
