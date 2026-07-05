@@ -93,13 +93,13 @@ function Xray({
                   {m.type === "learned" && (
                     <button
                       className="retract"
-                      title="stop injecting this memory (from next turn)"
+                      title="archive this memory — the agent stops using it (reversible in the Memory manager)"
                       onClick={async () => {
                         setNote(await onRetract(m.scope, m.id));
                         setGone((g) => ({ ...g, [key]: true }));
                       }}
                     >
-                      Retract
+                      Archive
                     </button>
                   )}
                 </div>
@@ -709,14 +709,14 @@ export default function Home() {
     return `${r.changed ?? 0} learned ${r.changed === 1 ? "memory" : "memories"} nudged ${dir} (constitution untouched).`;
   }
 
-  // Contest / retract a memory so it stops being injected.
+  // Archive a memory (contest it) so the agent stops using it.
   async function retractInXray(scope: string, id: string): Promise<string> {
     await fetch("/api/memory/retract", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ scope, id }),
     });
-    return `retracted ${scope} — it won't be injected next turn.`;
+    return `archived ${scope} — the agent won't use it next turn (restore it in the Memory manager).`;
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -1121,6 +1121,9 @@ export default function Home() {
                 Every memory, grouped by where it lives on the scope lattice — broad (whole firm) at the top,
                 specific (one person) at the bottom. A message&apos;s ▸ x-ray shows the subset injected that turn;
                 this is where you curate the whole library. Editing here changes the file on disk.
+                <br />
+                <b>Priority</b> sets how strongly the agent leans on a memory when space is tight. <b>Archive</b>{" "}
+                pauses one (reversible); <b>Delete</b> removes it for good.
               </div>
               {memNote && <div className="ctx-item">{memNote}</div>}
               {allMemories.length === 0 && <div className="empty">No memories yet.</div>}
@@ -1163,7 +1166,7 @@ export default function Home() {
                             <span className="mem-scope">{m.scope}</span>
                             <span className={`pill ${isConstitution ? "stable" : "ranked"}`}>{m.type}</span>
                             {m.confidential && <span className="pill conf">confidential</span>}
-                            {retracted && <span className="pill ret">retracted</span>}
+                            {retracted && <span className="pill ret">archived</span>}
                             <span className="mem-id">{m.id}</span>
                           </div>
                           <textarea
@@ -1175,31 +1178,47 @@ export default function Home() {
                           />
                           <div className="mem-controls">
                             {isConstitution ? (
-                              <span className="imp muted">authoritative · no decay</span>
+                              <span className="imp muted" title="constitution memories are authoritative and never decay">
+                                authoritative · no decay
+                              </span>
                             ) : (
-                              <label className="imp">
-                                importance {d.importance.toFixed(2)}
-                                <input
-                                  type="range"
-                                  min={0}
-                                  max={1}
-                                  step={0.05}
-                                  value={d.importance}
-                                  onChange={(e) =>
-                                    setMemDraft((s) => ({ ...s, [key]: { ...d, importance: Number(e.target.value) } }))
-                                  }
-                                />
-                              </label>
+                              <div
+                                className="priority"
+                                title="Priority: how strongly the agent leans on this memory when prompt space is tight"
+                              >
+                                <span className="priority-label">Priority</span>
+                                {(() => {
+                                  const bucket = d.importance < 0.4 ? "Low" : d.importance < 0.75 ? "Med" : "High";
+                                  return ([["Low", 0.3], ["Med", 0.55], ["High", 0.8]] as const).map(([lbl, val]) => (
+                                    <button
+                                      key={lbl}
+                                      className={`prio ${bucket === lbl ? "active" : ""}`}
+                                      onClick={() => setMemDraft((s) => ({ ...s, [key]: { ...d, importance: val } }))}
+                                    >
+                                      {lbl}
+                                    </button>
+                                  ));
+                                })()}
+                              </div>
                             )}
                             <div className="mem-actions">
                               <button className="mini" onClick={() => saveMem(m)}>Save</button>
                               {retracted ? (
-                                <button className="mini" onClick={() => setMemStatus(m, "active")}>Restore</button>
+                                <button className="mini" title="use this memory again" onClick={() => setMemStatus(m, "active")}>
+                                  Restore
+                                </button>
                               ) : (
-                                <button className="mini" onClick={() => setMemStatus(m, "retracted")}>Retract</button>
+                                <button
+                                  className="mini"
+                                  title="stop the agent using it — the record is kept, and it's reversible"
+                                  onClick={() => setMemStatus(m, "retracted")}
+                                >
+                                  Archive
+                                </button>
                               )}
                               <button
                                 className="reject"
+                                title="delete the file permanently — cannot be undone"
                                 onClick={() => {
                                   if (confirm(`Delete "${m.id}"? This removes the file permanently.`)) deleteMem(m);
                                 }}
