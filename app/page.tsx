@@ -26,7 +26,7 @@ type MessageMeta = {
   composition?: CompPart[];
 };
 type Message = { role: "user" | "assistant"; content: string; meta?: MessageMeta };
-type User = "alice" | "bob";
+type User = "callum" | "bob";
 type Injected = { id: string; scope: string; type: string; tier: string; tokens: number; text: string };
 type Dropped = { id: string; scope: string; reason: string };
 type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
@@ -93,13 +93,13 @@ function Xray({
                   {m.type === "learned" && (
                     <button
                       className="retract"
-                      title="stop injecting this memory (from next turn)"
+                      title="archive this memory — the agent stops using it (reversible in the Memory manager)"
                       onClick={async () => {
                         setNote(await onRetract(m.scope, m.id));
                         setGone((g) => ({ ...g, [key]: true }));
                       }}
                     >
-                      Retract
+                      Archive
                     </button>
                   )}
                 </div>
@@ -159,7 +159,7 @@ function Xray({
 const COMP_COLORS = ["#6366f1", "#8b5cf6", "#0ea5e9", "#f59e0b", "#10b981", "#ef4444", "#ec4899"];
 
 // One chat tab's metadata (mirrors lib/workspace ChatMeta).
-type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessage?: string; openFile?: string | null };
+type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessage?: string; openFile?: string | null; agentId?: string };
 
 // A project's config (mirrors lib/project ProjectConfig) — a client can have several.
 type ProjectMeta = { id: string; name: string; client: string; sector: string; type: string; status: string };
@@ -175,6 +175,9 @@ type MemItem = {
   importance: number;
   status: string;
   confidential?: boolean;
+  useCount?: number;
+  lastUsed?: string;
+  created?: string;
   body: string;
 };
 
@@ -188,6 +191,19 @@ type Nomination = {
   sourceClient: string;
   created: string;
 };
+// An agent from the roster (the harness config).
+type AgentItem = {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  model: string;
+  tools: string[];
+};
+// Library housekeeping suggestions (auto-lifecycle).
+type StaleItem = { scope: string; id: string; body: string; importance: number; lastActivity: string; days: number };
+type DupRef = { scope: string; id: string; body: string };
+type DupPair = { a: DupRef; b: DupRef; score: number };
 type Chunk = { file: string; text: string; score: number };
 type CompareResult = {
   naive: { chunks: Chunk[]; answer: string };
@@ -204,7 +220,7 @@ type Signal = {
 };
 
 export default function Home() {
-  const [user, setUser] = useState<User>("alice");
+  const [user, setUser] = useState<User>("callum");
   const [messages, setMessages] = useState<Message[]>([]);
   const [chats, setChats] = useState<ChatMeta[]>([]);
   const [activeChat, setActiveChat] = useState<string | null>(null);
@@ -226,9 +242,7 @@ export default function Home() {
   const [nominations, setNominations] = useState<Nomination[]>([]);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [signalThreshold, setSignalThreshold] = useState(3);
-  const [showQueue, setShowQueue] = useState(false);
   const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [showProposals, setShowProposals] = useState(false);
   const [abstracts, setAbstracts] = useState<Record<string, { text: string; leak?: Leak }>>({});
 
   const [comparing, setComparing] = useState(false);
@@ -236,9 +250,24 @@ export default function Home() {
   const [inlineCompare, setInlineCompare] = useState<{ question: string; result: CompareResult } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [showMemory, setShowMemory] = useState(false);
+  const [memView, setMemView] = useState<"library" | "pending">("library");
   const [allMemories, setAllMemories] = useState<MemItem[]>([]);
   const [memDraft, setMemDraft] = useState<Record<string, { body: string; importance: number }>>({});
   const [memNote, setMemNote] = useState<string | null>(null);
+  // Library browse controls (find / filter / sort) — for when there are lots of memories.
+  const [memSearch, setMemSearch] = useState("");
+  const [memLevel, setMemLevel] = useState("all");
+  const [memStatusFilter, setMemStatusFilter] = useState("all");
+  const [memTypeFilter, setMemTypeFilter] = useState("all");
+  const [memSort, setMemSort] = useState<"priority" | "used" | "newest">("priority");
+  const [lifecycle, setLifecycle] = useState<{ stale: StaleItem[]; duplicates: DupPair[] }>({ stale: [], duplicates: [] });
+
+  // Agent roster (the harness): the list, the tool catalogue, and the modal state.
+  const [agents, setAgents] = useState<AgentItem[]>([]);
+  const [allTools, setAllTools] = useState<{ name: string; description: string }[]>([]);
+  const [defaultAgentId, setDefaultAgentId] = useState("consulting-teammate");
+  const [showAgents, setShowAgents] = useState(false);
+  const [agentDraft, setAgentDraft] = useState<AgentItem | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -282,6 +311,54 @@ export default function Home() {
       .catch(() => setProposals([]));
   }
   useEffect(loadProposals, []);
+
+  // Load the agent roster + the tool catalogue (for the harness modal).
+  function loadAgents() {
+    fetch("/api/agents")
+      .then((r) => r.json())
+      .then((d) => {
+        setAgents(d.agents ?? []);
+        setAllTools(d.allTools ?? []);
+        if (d.defaultId) setDefaultAgentId(d.defaultId);
+      })
+      .catch(() => setAgents([]));
+  }
+  useEffect(loadAgents, []);
+
+  // Point the active chat at a different agent (persists on the chat).
+  async function setChatAgent(agentId: string) {
+    if (!activeChat) return;
+    await fetch("/api/chats/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user, chatId: activeChat, agentId }),
+    });
+    refreshChats();
+  }
+
+  // Create or update an agent from the modal, then refresh the roster.
+  async function saveAgentDraft() {
+    if (!agentDraft || !agentDraft.name.trim()) return;
+    const d = await fetch("/api/agents/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent: agentDraft }),
+    }).then((r) => r.json());
+    loadAgents();
+    if (d.agent) setAgentDraft(d.agent);
+  }
+  async function deleteAgentDraft() {
+    if (!agentDraft || agentDraft.id === defaultAgentId) return;
+    if (!confirm(`Delete agent "${agentDraft.name}"? Chats using it fall back to the default.`)) return;
+    await fetch("/api/agents/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: agentDraft.id }),
+    });
+    setAgentDraft(null);
+    loadAgents();
+  }
+
   async function approveProp(id: string) {
     await fetch("/api/memory/proposals/approve", {
       method: "POST",
@@ -289,6 +366,7 @@ export default function Home() {
       body: JSON.stringify({ id }),
     });
     loadProposals();
+    loadMemories(); // the approved memory now exists in the library
   }
   async function dismissProp(id: string) {
     await fetch("/api/memory/proposals/dismiss", {
@@ -297,6 +375,32 @@ export default function Home() {
       body: JSON.stringify({ id }),
     });
     loadProposals();
+  }
+
+  // Housekeeping suggestions (stale + near-duplicate memories). Embedding-based,
+  // so computed lazily when the Memory manager opens.
+  function loadLifecycle() {
+    fetch("/api/memory/lifecycle")
+      .then((r) => r.json())
+      .then((d) => setLifecycle({ stale: d.stale ?? [], duplicates: d.duplicates ?? [] }))
+      .catch(() => setLifecycle({ stale: [], duplicates: [] }));
+  }
+  async function archiveByRef(scope: string, id: string) {
+    await fetch("/api/memory/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope, id, status: "retracted" }),
+    });
+    loadMemories();
+    loadLifecycle();
+  }
+  async function keepByRef(scope: string, id: string) {
+    await fetch("/api/memory/touch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope, id }),
+    });
+    loadLifecycle();
   }
 
   // ---- Memory manager: load + edit the whole library ----
@@ -645,14 +749,14 @@ export default function Home() {
     return `${r.changed ?? 0} learned ${r.changed === 1 ? "memory" : "memories"} nudged ${dir} (constitution untouched).`;
   }
 
-  // Contest / retract a memory so it stops being injected.
+  // Archive a memory (contest it) so the agent stops using it.
   async function retractInXray(scope: string, id: string): Promise<string> {
     await fetch("/api/memory/retract", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ scope, id }),
     });
-    return `retracted ${scope} — it won't be injected next turn.`;
+    return `archived ${scope} — the agent won't use it next turn (restore it in the Memory manager).`;
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -687,18 +791,18 @@ export default function Home() {
               </optgroup>
             ))}
           </select>
-          <button className="queue-btn" onClick={() => { loadPromotions(); loadSignals(); setShowQueue(true); }}>
-            ⬆ Promotions{nominations.length ? ` (${nominations.length})` : ""}
+          <button className="queue-btn" onClick={() => { loadAgents(); setShowAgents(true); }}>
+            🤖 Agents
           </button>
-          <button className="queue-btn" onClick={() => { loadProposals(); setShowProposals(true); }}>
-            💡 Suggested{proposals.length ? ` (${proposals.length})` : ""}
-          </button>
-          <button className="queue-btn" onClick={() => { loadMemories(); setShowMemory(true); }}>
-            🧠 Memory manager
+          <button
+            className="queue-btn"
+            onClick={() => { loadMemories(); loadProposals(); loadPromotions(); loadSignals(); loadLifecycle(); setShowMemory(true); }}
+          >
+            🧠 Memory manager{proposals.length + nominations.length ? ` (${proposals.length + nominations.length})` : ""}
           </button>
           <div className="user-switch">
             <span className="subtitle">You are:</span>
-            <button className={`alice ${user === "alice" ? "active" : ""}`} onClick={() => setUser("alice")}>Alice</button>
+            <button className={`callum ${user === "callum" ? "active" : ""}`} onClick={() => setUser("callum")}>Callum</button>
             <button className={`bob ${user === "bob" ? "active" : ""}`} onClick={() => setUser("bob")}>Bob</button>
           </div>
         </div>
@@ -738,6 +842,19 @@ export default function Home() {
           <div className="panel-header">
             {activeChat ? (chats.find((c) => c.chatId === activeChat)?.title || "New chat") : "Chat"}
             {openFile && <span className="badge">this → {openFile.split("/").pop()}</span>}
+            {activeChat && agents.length > 0 && (
+              <span className="agent-pick" title="which agent answers in this chat">
+                🤖
+                <select
+                  value={chats.find((c) => c.chatId === activeChat)?.agentId ?? defaultAgentId}
+                  onChange={(e) => setChatAgent(e.target.value)}
+                >
+                  {agents.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              </span>
+            )}
           </div>
           <div className="chat">
             <div className="messages">
@@ -787,9 +904,17 @@ export default function Home() {
                         <span>
                           {personal ? "🧠 Remembered" : "💡 Suggested for the team"}: “{fact}”
                         </span>
-                        {!personal && (
-                          <button onClick={() => { loadProposals(); setShowProposals(true); }}>Review</button>
-                        )}
+                        {!personal && (() => {
+                          const prop = proposals.find((p) => p.fact === fact);
+                          return prop ? (
+                            <span className="chip-actions">
+                              <button onClick={() => approveProp(prop.id)}>Accept</button>
+                              <button className="ghost" onClick={() => dismissProp(prop.id)}>Decline</button>
+                            </span>
+                          ) : (
+                            <span className="chip-done">reviewed ✓</span>
+                          );
+                        })()}
                       </div>
                     );
                   })}
@@ -901,123 +1026,121 @@ export default function Home() {
       </div>
 
 
-      {/* ---- Promotion review queue (modal) ---- */}
-      {showQueue && (
-        <div className="modal-overlay" onClick={() => setShowQueue(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+      {/* ---- Memory manager (modal) ---- */}
+      {showAgents && (
+        <div className="modal-overlay" onClick={() => setShowAgents(false)}>
+          <div className="modal wide" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
-              <h2>Promotion review queue</h2>
-              <button onClick={() => setShowQueue(false)}>×</button>
-            </div>
-            <div className="modal-body">
-              {signals.length > 0 && (
-                <div className="signals">
-                  <div className="ctx-h">Signals accumulating (implicit)</div>
-                  {signals.map((s) => (
-                    <div key={s.pattern} className="sig">
-                      <div className="sig-top">
-                        <b>{s.pattern}</b>
-                        <span className="sig-count">
-                          {s.count}/{signalThreshold}
-                          {s.nominated ? " · nominated ✓" : ""}
-                        </span>
-                      </div>
-                      <div className="sig-bar">
-                        <div
-                          className="sig-fill"
-                          style={{ width: `${Math.min(100, (s.count / signalThreshold) * 100)}%` }}
-                        />
-                      </div>
-                      <div className="sig-obs">{s.lastObservation}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {nominations.length === 0 && (
-                <div className="empty">
-                  Nothing pending. When the agent nominates a project lesson to promote, it appears here — this
-                  is your “latent signals” inbox.
-                </div>
-              )}
-              {nominations.map((n) => (
-                <div key={n.id} className="nom">
-                  <div className="nom-target">
-                    promote to <b>{n.targetScope}</b>
-                  </div>
-                  <div className="nom-fact">“{n.fact}”</div>
-                  <div className="nom-meta">
-                    nominated by {n.nominatedBy} · from {n.sourceProject} · {n.reason}
-                  </div>
-                  <button className="mini" onClick={() => doAbstract(n.id)}>
-                    Abstract &amp; leak-check
-                  </button>
-                  {abstracts[n.id] && (
-                    <>
-                      {abstracts[n.id].leak?.flagged && (
-                        <div className="leak">
-                          ⚠ possible client detail: {abstracts[n.id].leak!.hits.join(", ")} — edit before promoting
-                        </div>
-                      )}
-                      <textarea
-                        className="nom-edit"
-                        value={abstracts[n.id].text}
-                        onChange={(e) =>
-                          setAbstracts((a) => ({ ...a, [n.id]: { ...a[n.id], text: e.target.value } }))
-                        }
-                      />
-                    </>
-                  )}
-                  <div className="nom-actions">
-                    <button className="promote" onClick={() => doPromote(n.id)}>
-                      Promote{abstracts[n.id] ? " (abstracted)" : " as-is"}
-                    </button>
-                    <button className="reject" onClick={() => doReject(n.id)}>
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ---- Suggested memories (approval inbox) ---- */}
-      {showProposals && (
-        <div className="modal-overlay" onClick={() => setShowProposals(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <h2>Suggested memories</h2>
-              <button onClick={() => setShowProposals(false)}>×</button>
+              <h2>🤖 Agents · the harness</h2>
+              <button onClick={() => setShowAgents(false)}>×</button>
             </div>
             <div className="modal-body">
               <div className="empty">
-                Shared memories the agent proposed. Nothing is saved to the team’s memory until you approve it —
-                your personal memories save straight away.
+                An agent is a <b>system prompt + model + tools</b>. Memory (the scope lattice) and your working
+                context are wired into every agent the same way; the loop is always think → call tools → answer.
+                Pick a chat’s agent from the 🤖 menu in the chat header.
               </div>
-              {proposals.length === 0 && <div className="empty">Nothing pending.</div>}
-              {proposals.map((p) => (
-                <div key={p.id} className="nom">
-                  <div className="nom-target">
-                    save to <b>{p.scope}</b>
-                  </div>
-                  <div className="nom-fact">“{p.fact}”</div>
-                  <div className="nom-meta">
-                    suggested by {p.proposedBy} · from {p.sourceProject}
-                  </div>
-                  <div className="nom-actions">
-                    <button className="promote" onClick={() => approveProp(p.id)}>Approve &amp; save</button>
-                    <button className="reject" onClick={() => dismissProp(p.id)}>Dismiss</button>
-                  </div>
+              <div className="agents-layout">
+                <div className="agents-list">
+                  {agents.map((a) => (
+                    <div
+                      key={a.id}
+                      className={`agent-row ${agentDraft?.id === a.id ? "active" : ""}`}
+                      onClick={() => setAgentDraft({ ...a })}
+                    >
+                      <div className="agent-row-name">
+                        {a.name}
+                        {a.id === defaultAgentId && <span className="tag">default</span>}
+                      </div>
+                      <div className="agent-row-desc">{a.description}</div>
+                    </div>
+                  ))}
+                  <button
+                    className="new-chat"
+                    onClick={() =>
+                      setAgentDraft({
+                        id: "",
+                        name: "",
+                        description: "",
+                        systemPrompt: "",
+                        model: "claude-opus-4-8",
+                        tools: allTools.map((t) => t.name),
+                      })
+                    }
+                  >
+                    ＋ New agent
+                  </button>
                 </div>
-              ))}
+                <div className="agent-editor">
+                  {!agentDraft ? (
+                    <div className="empty">Select an agent to view or edit its harness.</div>
+                  ) : (
+                    <>
+                      <label className="fld">
+                        Name
+                        <input value={agentDraft.name} onChange={(e) => setAgentDraft({ ...agentDraft, name: e.target.value })} />
+                      </label>
+                      <label className="fld">
+                        Description
+                        <input value={agentDraft.description} onChange={(e) => setAgentDraft({ ...agentDraft, description: e.target.value })} />
+                      </label>
+                      <label className="fld">
+                        Model
+                        <select value={agentDraft.model} onChange={(e) => setAgentDraft({ ...agentDraft, model: e.target.value })}>
+                          <option value="claude-opus-4-8">claude-opus-4-8</option>
+                          <option value="claude-sonnet-5">claude-sonnet-5</option>
+                          <option value="claude-haiku-4-5">claude-haiku-4-5</option>
+                        </select>
+                      </label>
+                      <label className="fld">
+                        System prompt
+                        <textarea
+                          className="agent-prompt"
+                          value={agentDraft.systemPrompt}
+                          onChange={(e) => setAgentDraft({ ...agentDraft, systemPrompt: e.target.value })}
+                        />
+                      </label>
+                      <div className="fld">
+                        Tools this agent may call
+                        <div className="tool-checks">
+                          {allTools.map((t) => (
+                            <label key={t.name} className="tool-check" title={t.description}>
+                              <input
+                                type="checkbox"
+                                checked={agentDraft.tools.includes(t.name)}
+                                onChange={(e) =>
+                                  setAgentDraft({
+                                    ...agentDraft,
+                                    tools: e.target.checked
+                                      ? [...agentDraft.tools, t.name]
+                                      : agentDraft.tools.filter((x) => x !== t.name),
+                                  })
+                                }
+                              />
+                              {t.name}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="ctx-cap">
+                        Always wired in (not editable): scope-lattice memory · working context · the
+                        think→tools→answer loop.
+                      </div>
+                      <div className="mem-actions">
+                        <button className="mini" onClick={saveAgentDraft}>Save</button>
+                        {agentDraft.id && agentDraft.id !== defaultAgentId && (
+                          <button className="reject" onClick={deleteAgentDraft}>Delete</button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* ---- Memory manager (modal) ---- */}
       {showMemory && (
         <div className="modal-overlay" onClick={() => setShowMemory(false)}>
           <div className="modal wide" onClick={(e) => e.stopPropagation()}>
@@ -1025,14 +1148,59 @@ export default function Home() {
               <h2>🧠 Memory manager</h2>
               <button onClick={() => setShowMemory(false)}>×</button>
             </div>
+            <div className="modal-tabs">
+              <button className={memView === "library" ? "active" : ""} onClick={() => setMemView("library")}>Library</button>
+              <button className={memView === "pending" ? "active" : ""} onClick={() => setMemView("pending")}>
+                Pending{proposals.length + nominations.length ? ` (${proposals.length + nominations.length})` : ""}
+              </button>
+            </div>
             <div className="modal-body">
+              {memView === "library" && (
+              <>
               <div className="empty">
                 Every memory, grouped by where it lives on the scope lattice — broad (whole firm) at the top,
                 specific (one person) at the bottom. A message&apos;s ▸ x-ray shows the subset injected that turn;
                 this is where you curate the whole library. Editing here changes the file on disk.
+                <br />
+                <b>Priority</b> sets how strongly the agent leans on a memory when space is tight. <b>Archive</b>{" "}
+                pauses one (reversible); <b>Delete</b> removes it for good.
               </div>
               {memNote && <div className="ctx-item">{memNote}</div>}
               {allMemories.length === 0 && <div className="empty">No memories yet.</div>}
+              {allMemories.length > 0 && (
+                <div className="mem-toolbar">
+                  <input
+                    className="mem-search"
+                    placeholder="Search memories…"
+                    value={memSearch}
+                    onChange={(e) => setMemSearch(e.target.value)}
+                  />
+                  <select value={memLevel} onChange={(e) => setMemLevel(e.target.value)} title="scope level">
+                    <option value="all">All levels</option>
+                    <option value="company">Company</option>
+                    <option value="sector">Sector</option>
+                    <option value="client">Client</option>
+                    <option value="stakeholder">Stakeholder</option>
+                    <option value="project">Project</option>
+                    <option value="personal">Personal</option>
+                  </select>
+                  <select value={memStatusFilter} onChange={(e) => setMemStatusFilter(e.target.value)} title="status">
+                    <option value="all">Active + archived</option>
+                    <option value="active">Active only</option>
+                    <option value="archived">Archived only</option>
+                  </select>
+                  <select value={memTypeFilter} onChange={(e) => setMemTypeFilter(e.target.value)} title="type">
+                    <option value="all">All types</option>
+                    <option value="constitution">Constitution</option>
+                    <option value="learned">Learned</option>
+                  </select>
+                  <select value={memSort} onChange={(e) => setMemSort(e.target.value as typeof memSort)} title="sort">
+                    <option value="priority">Sort: priority</option>
+                    <option value="used">Sort: most-used</option>
+                    <option value="newest">Sort: newest</option>
+                  </select>
+                </div>
+              )}
               {(() => {
                 // Group by lattice LEVEL (the scope's first segment), then render
                 // the levels broad → specific with a labelled, divided section each.
@@ -1044,14 +1212,31 @@ export default function Home() {
                   { key: "project", label: "Project", gloss: "this engagement only" },
                   { key: "personal", label: "Personal", gloss: "just this user" },
                 ];
-                const byLevel = allMemories.reduce<Record<string, MemItem[]>>((acc, m) => {
+                // Apply the browse controls, then group + sort within each level.
+                const q = memSearch.trim().toLowerCase();
+                const filtered = allMemories.filter((m) => {
+                  if (memLevel !== "all" && m.scope.split("/")[0] !== memLevel) return false;
+                  if (memStatusFilter === "active" && m.status === "retracted") return false;
+                  if (memStatusFilter === "archived" && m.status !== "retracted") return false;
+                  if (memTypeFilter !== "all" && m.type !== memTypeFilter) return false;
+                  if (q && !(m.body.toLowerCase().includes(q) || m.scope.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)))
+                    return false;
+                  return true;
+                });
+                const rank = (m: MemItem) =>
+                  memSort === "used" ? (m.useCount ?? 0) : memSort === "newest" ? (m.created ?? m.lastUsed ?? "") : m.importance;
+                const byLevel = filtered.reduce<Record<string, MemItem[]>>((acc, m) => {
                   (acc[m.scope.split("/")[0]] ||= []).push(m);
                   return acc;
                 }, {});
+                for (const k of Object.keys(byLevel)) {
+                  byLevel[k].sort((a, b) => (rank(a) > rank(b) ? -1 : rank(a) < rank(b) ? 1 : 0));
+                }
                 const known = LEVELS.map((l) => l.key);
                 const extras = Object.keys(byLevel)
                   .filter((k) => !known.includes(k))
                   .map((k) => ({ key: k, label: k, gloss: "" }));
+                if (filtered.length === 0) return <div className="empty">No memories match.</div>;
                 return [...LEVELS, ...extras]
                   .filter((lvl) => byLevel[lvl.key]?.length)
                   .map((lvl) => (
@@ -1072,7 +1257,8 @@ export default function Home() {
                             <span className="mem-scope">{m.scope}</span>
                             <span className={`pill ${isConstitution ? "stable" : "ranked"}`}>{m.type}</span>
                             {m.confidential && <span className="pill conf">confidential</span>}
-                            {retracted && <span className="pill ret">retracted</span>}
+                            {retracted && <span className="pill ret">archived</span>}
+                            {m.useCount ? <span className="mem-uses" title="turns it's been injected into">used {m.useCount}×</span> : null}
                             <span className="mem-id">{m.id}</span>
                           </div>
                           <textarea
@@ -1084,31 +1270,47 @@ export default function Home() {
                           />
                           <div className="mem-controls">
                             {isConstitution ? (
-                              <span className="imp muted">authoritative · no decay</span>
+                              <span className="imp muted" title="constitution memories are authoritative and never decay">
+                                authoritative · no decay
+                              </span>
                             ) : (
-                              <label className="imp">
-                                importance {d.importance.toFixed(2)}
-                                <input
-                                  type="range"
-                                  min={0}
-                                  max={1}
-                                  step={0.05}
-                                  value={d.importance}
-                                  onChange={(e) =>
-                                    setMemDraft((s) => ({ ...s, [key]: { ...d, importance: Number(e.target.value) } }))
-                                  }
-                                />
-                              </label>
+                              <div
+                                className="priority"
+                                title="Priority: how strongly the agent leans on this memory when prompt space is tight"
+                              >
+                                <span className="priority-label">Priority</span>
+                                {(() => {
+                                  const bucket = d.importance < 0.4 ? "Low" : d.importance < 0.75 ? "Med" : "High";
+                                  return ([["Low", 0.3], ["Med", 0.55], ["High", 0.8]] as const).map(([lbl, val]) => (
+                                    <button
+                                      key={lbl}
+                                      className={`prio ${bucket === lbl ? "active" : ""}`}
+                                      onClick={() => setMemDraft((s) => ({ ...s, [key]: { ...d, importance: val } }))}
+                                    >
+                                      {lbl}
+                                    </button>
+                                  ));
+                                })()}
+                              </div>
                             )}
                             <div className="mem-actions">
                               <button className="mini" onClick={() => saveMem(m)}>Save</button>
                               {retracted ? (
-                                <button className="mini" onClick={() => setMemStatus(m, "active")}>Restore</button>
+                                <button className="mini" title="use this memory again" onClick={() => setMemStatus(m, "active")}>
+                                  Restore
+                                </button>
                               ) : (
-                                <button className="mini" onClick={() => setMemStatus(m, "retracted")}>Retract</button>
+                                <button
+                                  className="mini"
+                                  title="stop the agent using it — the record is kept, and it's reversible"
+                                  onClick={() => setMemStatus(m, "retracted")}
+                                >
+                                  Archive
+                                </button>
                               )}
                               <button
                                 className="reject"
+                                title="delete the file permanently — cannot be undone"
                                 onClick={() => {
                                   if (confirm(`Delete "${m.id}"? This removes the file permanently.`)) deleteMem(m);
                                 }}
@@ -1123,6 +1325,125 @@ export default function Home() {
                   </div>
                 ));
               })()}
+              </>
+              )}
+
+              {memView === "pending" && (
+              <>
+                <div className="empty">
+                  Awaiting your decision: memories the agent suggested, lessons nominated to promote to a broader
+                  scope, and implicit signals building toward a nomination. Approving a suggestion here is the
+                  same as the Accept button on a chat suggestion.
+                </div>
+                {proposals.length + nominations.length + signals.length + lifecycle.stale.length + lifecycle.duplicates.length === 0 && (
+                  <div className="empty">Nothing pending right now.</div>
+                )}
+
+                {proposals.length > 0 && <div className="ctx-h">💡 Suggested memories ({proposals.length})</div>}
+                {proposals.map((p) => (
+                  <div key={p.id} className="nom">
+                    <div className="nom-target">save to <b>{p.scope}</b></div>
+                    <div className="nom-fact">“{p.fact}”</div>
+                    <div className="nom-meta">suggested by {p.proposedBy} · from {p.sourceProject}</div>
+                    <div className="nom-actions">
+                      <button className="promote" onClick={() => approveProp(p.id)}>Approve &amp; save</button>
+                      <button className="reject" onClick={() => dismissProp(p.id)}>Dismiss</button>
+                    </div>
+                  </div>
+                ))}
+
+                {nominations.length > 0 && <div className="ctx-h">⬆ Promotions ({nominations.length})</div>}
+                {nominations.map((n) => (
+                  <div key={n.id} className="nom">
+                    <div className="nom-target">promote to <b>{n.targetScope}</b></div>
+                    <div className="nom-fact">“{n.fact}”</div>
+                    <div className="nom-meta">nominated by {n.nominatedBy} · from {n.sourceProject} · {n.reason}</div>
+                    <button className="mini" onClick={() => doAbstract(n.id)}>Abstract &amp; leak-check</button>
+                    {abstracts[n.id] && (
+                      <>
+                        {abstracts[n.id].leak?.flagged && (
+                          <div className="leak">
+                            ⚠ possible client detail: {abstracts[n.id].leak!.hits.join(", ")} — edit before promoting
+                          </div>
+                        )}
+                        <textarea
+                          className="nom-edit"
+                          value={abstracts[n.id].text}
+                          onChange={(e) => setAbstracts((a) => ({ ...a, [n.id]: { ...a[n.id], text: e.target.value } }))}
+                        />
+                      </>
+                    )}
+                    <div className="nom-actions">
+                      <button className="promote" onClick={() => doPromote(n.id)}>
+                        Promote{abstracts[n.id] ? " (abstracted)" : " as-is"}
+                      </button>
+                      <button className="reject" onClick={() => doReject(n.id)}>Reject</button>
+                    </div>
+                  </div>
+                ))}
+
+                {signals.length > 0 && (
+                  <div className="signals">
+                    <div className="ctx-h">Signals accumulating (implicit)</div>
+                    {signals.map((s) => (
+                      <div key={s.pattern} className="sig">
+                        <div className="sig-top">
+                          <b>{s.pattern}</b>
+                          <span className="sig-count">
+                            {s.count}/{signalThreshold}{s.nominated ? " · nominated ✓" : ""}
+                          </span>
+                        </div>
+                        <div className="sig-bar">
+                          <div className="sig-fill" style={{ width: `${Math.min(100, (s.count / signalThreshold) * 100)}%` }} />
+                        </div>
+                        <div className="sig-obs">{s.lastObservation}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {lifecycle.stale.length > 0 && (
+                  <>
+                    <div className="ctx-h">🧹 Stale — suggest archiving ({lifecycle.stale.length})</div>
+                    <div className="ctx-cap">
+                      Low-priority learned memories not used or reinforced in over a month. Archiving keeps the
+                      record but stops the agent using it; Keep snoozes the reminder.
+                    </div>
+                    {lifecycle.stale.map((s) => (
+                      <div key={`stale-${s.scope}:${s.id}`} className="nom">
+                        <div className="nom-target"><b>{s.scope}</b> · last active {s.lastActivity} ({s.days}d ago)</div>
+                        <div className="nom-fact">“{s.body}”</div>
+                        <div className="nom-actions">
+                          <button className="reject" onClick={() => archiveByRef(s.scope, s.id)}>Archive</button>
+                          <button className="mini" onClick={() => keepByRef(s.scope, s.id)}>Keep</button>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {lifecycle.duplicates.length > 0 && (
+                  <>
+                    <div className="ctx-h">👯 Possible duplicates ({lifecycle.duplicates.length})</div>
+                    <div className="ctx-cap">Near-identical learned memories — archive one to consolidate.</div>
+                    {lifecycle.duplicates.map((p, i) => (
+                      <div key={`dup-${i}`} className="nom">
+                        <div className="nom-target">similarity {Math.round(p.score * 100)}%</div>
+                        <div className="dup-pair">
+                          {[p.a, p.b].map((side) => (
+                            <div key={`${side.scope}:${side.id}`} className="dup-side">
+                              <div className="nom-fact">“{side.body}”</div>
+                              <div className="nom-meta">{side.scope}</div>
+                              <button className="reject" onClick={() => archiveByRef(side.scope, side.id)}>Archive this</button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </>
+              )}
             </div>
           </div>
         </div>

@@ -5,7 +5,5 @@
   "sector": "healthcare",
   "type": "diligence",
   "status": "complete",
-  "stakeholders": [
-    { "id": "acme-cfo", "name": "Jane Okafor", "role": "CFO" }
-  ]
+  "stakeholders": ["acme-cfo"]
 }

@@ -39,7 +39,7 @@ export async function POST(req: Request) {
     // 3. Agentic: the agent decides what to open (no memory, to isolate retrieval).
     const { text: agenticAnswer, trace } = await respond([{ role: "user", content: q }], {
       projectId: proj,
-      user: "alice",
+      user: "callum",
     });
 
     return Response.json({

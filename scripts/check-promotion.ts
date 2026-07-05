@@ -13,7 +13,7 @@ async function main() {
   const { buildWorkingContext } = await import("../lib/context");
 
   const project = "acme-health";
-  const user = "alice";
+  const user = "callum";
   const message =
     "We've learned on this engagement that the CFO — the economic buyer — will not approve any recommendation " +
     "without a downside/sensitivity case, and this reflects how healthcare finance sponsors decide in general. " +

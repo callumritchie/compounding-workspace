@@ -37,11 +37,12 @@ export type ChatMeta = {
   updated: string;
   lastUserMessage?: string;
   openFile?: string | null;
+  agentId?: string; // which agent from the roster this chat uses (undefined = default)
 };
 
 // The two simulated users. Switching between them is how we demo "shared vs
 // private": chat history is PRIVATE, files + memory are SHARED.
-export const USERS = ["alice", "bob"] as const;
+export const USERS = ["callum", "bob"] as const;
 export type User = (typeof USERS)[number];
 
 // Root of all on-disk state.

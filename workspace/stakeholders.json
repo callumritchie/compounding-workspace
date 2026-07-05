@@ -1,0 +1,12 @@
+{
+  "acme-cfo": {
+    "name": "Jane Okafor",
+    "role": "CFO",
+    "org": "acme"
+  },
+  "acme-cmo": {
+    "name": "Raj Patel",
+    "role": "Chief Medical Officer",
+    "org": "acme"
+  }
+}
