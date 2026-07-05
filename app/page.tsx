@@ -13,6 +13,8 @@
 --------------------------------------------------------------------------- */
 
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type Message = { role: "user" | "assistant"; content: string };
 type User = "alice" | "bob";
@@ -365,7 +367,13 @@ export default function Home() {
               {messages.map((m, i) => (
                 <div key={i} className={`msg ${m.role}`}>
                   <div className="role">{m.role === "user" ? user : "agent"}</div>
-                  {m.content}
+                  {m.role === "assistant" ? (
+                    <div className="markdown">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    m.content
+                  )}
                 </div>
               ))}
               {loading && (

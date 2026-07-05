@@ -168,6 +168,27 @@ html, body {
 .msg.assistant { align-self: flex-start; background: var(--bg); border: 1px solid var(--border); }
 .msg .role { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
 
+/* Rendered markdown in assistant messages */
+.markdown { white-space: normal; }
+.markdown > *:first-child { margin-top: 0; }
+.markdown > *:last-child { margin-bottom: 0; }
+.markdown p { margin: 0 0 8px; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4 { margin: 12px 0 6px; line-height: 1.3; }
+.markdown h1 { font-size: 18px; }
+.markdown h2 { font-size: 16px; }
+.markdown h3 { font-size: 14px; }
+.markdown ul, .markdown ol { margin: 0 0 8px; padding-left: 20px; }
+.markdown li { margin: 2px 0; }
+.markdown code { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font-size: 12px; font-family: ui-monospace, Menlo, monospace; }
+.markdown pre { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; overflow-x: auto; }
+.markdown pre code { border: none; padding: 0; background: transparent; }
+.markdown table { border-collapse: collapse; margin: 6px 0; font-size: 12px; display: block; overflow-x: auto; }
+.markdown th, .markdown td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+.markdown th { background: var(--bg); }
+.markdown a { color: var(--accent); }
+.markdown blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--border); color: var(--muted); }
+.markdown strong { font-weight: 600; }
+
 .composer { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border); }
 .composer textarea {
   flex: 1; resize: none; border: 1px solid var(--border); border-radius: 8px;
