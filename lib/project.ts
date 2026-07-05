@@ -10,11 +10,15 @@
 import { promises as fs } from "fs";
 import path from "path";
 
+export type ProjectStatus = "in-progress" | "complete";
+
 export type ProjectConfig = {
   id: string;
+  name: string; // human label, e.g. "Growth strategy"
   client: string; // the client organisation
   sector: string; // e.g. healthcare
   type: string; // e.g. strategy, diligence
+  status: ProjectStatus; // in-progress | complete — a client can have several
 };
 
 export async function getProjectConfig(projectId: string): Promise<ProjectConfig> {
@@ -23,14 +27,23 @@ export async function getProjectConfig(projectId: string): Promise<ProjectConfig
     const cfg = JSON.parse(await fs.readFile(file, "utf8")) as Partial<ProjectConfig>;
     return {
       id: projectId,
+      name: cfg.name ?? projectId,
       client: cfg.client ?? projectId,
       sector: cfg.sector ?? "unknown",
       type: cfg.type ?? "unknown",
+      status: cfg.status === "complete" ? "complete" : "in-progress",
     };
   } catch {
     // Sensible default if a project has no config file yet.
-    return { id: projectId, client: projectId, sector: "unknown", type: "unknown" };
+    return { id: projectId, name: projectId, client: projectId, sector: "unknown", type: "unknown", status: "in-progress" };
   }
+}
+
+// All projects with their config, for the switcher (grouped by client).
+export async function listProjectConfigs(): Promise<ProjectConfig[]> {
+  const { listProjects } = await import("./corpus");
+  const ids = await listProjects();
+  return Promise.all(ids.map(getProjectConfig));
 }
 
 // The tags that describe "the current situation", used to match a memory's

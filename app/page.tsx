@@ -40,6 +40,9 @@ const COMP_COLORS = ["#6366f1", "#8b5cf6", "#0ea5e9", "#f59e0b", "#10b981", "#ef
 // One chat tab's metadata (mirrors lib/workspace ChatMeta).
 type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessage?: string; openFile?: string | null };
 
+// A project's config (mirrors lib/project ProjectConfig) — a client can have several.
+type ProjectMeta = { id: string; name: string; client: string; sector: string; type: string; status: string };
+
 // A memory as shown in the manager (the whole library, incl. retracted).
 type MemItem = {
   id: string;
@@ -93,7 +96,7 @@ export default function Home() {
   const [feedbackNote, setFeedbackNote] = useState<string | null>(null);
 
   const [project, setProject] = useState("acme-health");
-  const [projects, setProjects] = useState<string[]>([]);
+  const [projects, setProjects] = useState<ProjectMeta[]>([]);
   const [nominations, setNominations] = useState<Nomination[]>([]);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [signalThreshold, setSignalThreshold] = useState(3);
@@ -456,9 +459,20 @@ export default function Home() {
           <span className="subtitle">context engineering, made visible</span>
         </h1>
         <div className="topbar-right">
-          <select className="project-select" value={project} onChange={(e) => setProject(e.target.value)} title="project">
-            {projects.map((p) => (
-              <option key={p} value={p}>{p}</option>
+          <select className="project-select" value={project} onChange={(e) => setProject(e.target.value)} title="project (grouped by client · ✓ complete, ● in-progress)">
+            {Object.entries(
+              projects.reduce<Record<string, ProjectMeta[]>>((acc, p) => {
+                (acc[p.client] ||= []).push(p);
+                return acc;
+              }, {})
+            ).map(([client, ps]) => (
+              <optgroup key={client} label={client}>
+                {ps.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.status === "complete" ? "✓" : "●"} {p.name} · {p.type}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
           <button className="queue-btn" onClick={() => setShowCompare(true)}>

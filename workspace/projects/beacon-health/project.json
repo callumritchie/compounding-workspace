@@ -1,6 +1,8 @@
 {
   "id": "beacon-health",
+  "name": "Market entry",
   "client": "beacon",
   "sector": "healthcare",
-  "type": "strategy"
+  "type": "strategy",
+  "status": "complete"
 }
