@@ -235,9 +235,7 @@ export default function Home() {
   const [nominations, setNominations] = useState<Nomination[]>([]);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [signalThreshold, setSignalThreshold] = useState(3);
-  const [showQueue, setShowQueue] = useState(false);
   const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [showProposals, setShowProposals] = useState(false);
   const [abstracts, setAbstracts] = useState<Record<string, { text: string; leak?: Leak }>>({});
 
   const [comparing, setComparing] = useState(false);
@@ -245,6 +243,7 @@ export default function Home() {
   const [inlineCompare, setInlineCompare] = useState<{ question: string; result: CompareResult } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [showMemory, setShowMemory] = useState(false);
+  const [memView, setMemView] = useState<"library" | "pending">("library");
   const [allMemories, setAllMemories] = useState<MemItem[]>([]);
   const [memDraft, setMemDraft] = useState<Record<string, { body: string; importance: number }>>({});
   const [memNote, setMemNote] = useState<string | null>(null);
@@ -353,6 +352,7 @@ export default function Home() {
       body: JSON.stringify({ id }),
     });
     loadProposals();
+    loadMemories(); // the approved memory now exists in the library
   }
   async function dismissProp(id: string) {
     await fetch("/api/memory/proposals/dismiss", {
@@ -751,17 +751,14 @@ export default function Home() {
               </optgroup>
             ))}
           </select>
-          <button className="queue-btn" onClick={() => { loadPromotions(); loadSignals(); setShowQueue(true); }}>
-            ⬆ Promotions{nominations.length ? ` (${nominations.length})` : ""}
-          </button>
-          <button className="queue-btn" onClick={() => { loadProposals(); setShowProposals(true); }}>
-            💡 Suggested{proposals.length ? ` (${proposals.length})` : ""}
-          </button>
           <button className="queue-btn" onClick={() => { loadAgents(); setShowAgents(true); }}>
             🤖 Agents
           </button>
-          <button className="queue-btn" onClick={() => { loadMemories(); setShowMemory(true); }}>
-            🧠 Memory manager
+          <button
+            className="queue-btn"
+            onClick={() => { loadMemories(); loadProposals(); loadPromotions(); loadSignals(); setShowMemory(true); }}
+          >
+            🧠 Memory manager{proposals.length + nominations.length ? ` (${proposals.length + nominations.length})` : ""}
           </button>
           <div className="user-switch">
             <span className="subtitle">You are:</span>
@@ -867,9 +864,17 @@ export default function Home() {
                         <span>
                           {personal ? "🧠 Remembered" : "💡 Suggested for the team"}: “{fact}”
                         </span>
-                        {!personal && (
-                          <button onClick={() => { loadProposals(); setShowProposals(true); }}>Review</button>
-                        )}
+                        {!personal && (() => {
+                          const prop = proposals.find((p) => p.fact === fact);
+                          return prop ? (
+                            <span className="chip-actions">
+                              <button onClick={() => approveProp(prop.id)}>Accept</button>
+                              <button className="ghost" onClick={() => dismissProp(prop.id)}>Decline</button>
+                            </span>
+                          ) : (
+                            <span className="chip-done">reviewed ✓</span>
+                          );
+                        })()}
                       </div>
                     );
                   })}
@@ -980,122 +985,6 @@ export default function Home() {
         </div>
       </div>
 
-
-      {/* ---- Promotion review queue (modal) ---- */}
-      {showQueue && (
-        <div className="modal-overlay" onClick={() => setShowQueue(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <h2>Promotion review queue</h2>
-              <button onClick={() => setShowQueue(false)}>×</button>
-            </div>
-            <div className="modal-body">
-              {signals.length > 0 && (
-                <div className="signals">
-                  <div className="ctx-h">Signals accumulating (implicit)</div>
-                  {signals.map((s) => (
-                    <div key={s.pattern} className="sig">
-                      <div className="sig-top">
-                        <b>{s.pattern}</b>
-                        <span className="sig-count">
-                          {s.count}/{signalThreshold}
-                          {s.nominated ? " · nominated ✓" : ""}
-                        </span>
-                      </div>
-                      <div className="sig-bar">
-                        <div
-                          className="sig-fill"
-                          style={{ width: `${Math.min(100, (s.count / signalThreshold) * 100)}%` }}
-                        />
-                      </div>
-                      <div className="sig-obs">{s.lastObservation}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {nominations.length === 0 && (
-                <div className="empty">
-                  Nothing pending. When the agent nominates a project lesson to promote, it appears here — this
-                  is your “latent signals” inbox.
-                </div>
-              )}
-              {nominations.map((n) => (
-                <div key={n.id} className="nom">
-                  <div className="nom-target">
-                    promote to <b>{n.targetScope}</b>
-                  </div>
-                  <div className="nom-fact">“{n.fact}”</div>
-                  <div className="nom-meta">
-                    nominated by {n.nominatedBy} · from {n.sourceProject} · {n.reason}
-                  </div>
-                  <button className="mini" onClick={() => doAbstract(n.id)}>
-                    Abstract &amp; leak-check
-                  </button>
-                  {abstracts[n.id] && (
-                    <>
-                      {abstracts[n.id].leak?.flagged && (
-                        <div className="leak">
-                          ⚠ possible client detail: {abstracts[n.id].leak!.hits.join(", ")} — edit before promoting
-                        </div>
-                      )}
-                      <textarea
-                        className="nom-edit"
-                        value={abstracts[n.id].text}
-                        onChange={(e) =>
-                          setAbstracts((a) => ({ ...a, [n.id]: { ...a[n.id], text: e.target.value } }))
-                        }
-                      />
-                    </>
-                  )}
-                  <div className="nom-actions">
-                    <button className="promote" onClick={() => doPromote(n.id)}>
-                      Promote{abstracts[n.id] ? " (abstracted)" : " as-is"}
-                    </button>
-                    <button className="reject" onClick={() => doReject(n.id)}>
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ---- Suggested memories (approval inbox) ---- */}
-      {showProposals && (
-        <div className="modal-overlay" onClick={() => setShowProposals(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <h2>Suggested memories</h2>
-              <button onClick={() => setShowProposals(false)}>×</button>
-            </div>
-            <div className="modal-body">
-              <div className="empty">
-                Shared memories the agent proposed. Nothing is saved to the team’s memory until you approve it —
-                your personal memories save straight away.
-              </div>
-              {proposals.length === 0 && <div className="empty">Nothing pending.</div>}
-              {proposals.map((p) => (
-                <div key={p.id} className="nom">
-                  <div className="nom-target">
-                    save to <b>{p.scope}</b>
-                  </div>
-                  <div className="nom-fact">“{p.fact}”</div>
-                  <div className="nom-meta">
-                    suggested by {p.proposedBy} · from {p.sourceProject}
-                  </div>
-                  <div className="nom-actions">
-                    <button className="promote" onClick={() => approveProp(p.id)}>Approve &amp; save</button>
-                    <button className="reject" onClick={() => dismissProp(p.id)}>Dismiss</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ---- Memory manager (modal) ---- */}
       {showAgents && (
@@ -1219,7 +1108,15 @@ export default function Home() {
               <h2>🧠 Memory manager</h2>
               <button onClick={() => setShowMemory(false)}>×</button>
             </div>
+            <div className="modal-tabs">
+              <button className={memView === "library" ? "active" : ""} onClick={() => setMemView("library")}>Library</button>
+              <button className={memView === "pending" ? "active" : ""} onClick={() => setMemView("pending")}>
+                Pending{proposals.length + nominations.length ? ` (${proposals.length + nominations.length})` : ""}
+              </button>
+            </div>
             <div className="modal-body">
+              {memView === "library" && (
+              <>
               <div className="empty">
                 Every memory, grouped by where it lives on the scope lattice — broad (whole firm) at the top,
                 specific (one person) at the bottom. A message&apos;s ▸ x-ray shows the subset injected that turn;
@@ -1317,6 +1214,84 @@ export default function Home() {
                   </div>
                 ));
               })()}
+              </>
+              )}
+
+              {memView === "pending" && (
+              <>
+                <div className="empty">
+                  Awaiting your decision: memories the agent suggested, lessons nominated to promote to a broader
+                  scope, and implicit signals building toward a nomination. Approving a suggestion here is the
+                  same as the Accept button on a chat suggestion.
+                </div>
+                {proposals.length + nominations.length + signals.length === 0 && (
+                  <div className="empty">Nothing pending right now.</div>
+                )}
+
+                {proposals.length > 0 && <div className="ctx-h">💡 Suggested memories ({proposals.length})</div>}
+                {proposals.map((p) => (
+                  <div key={p.id} className="nom">
+                    <div className="nom-target">save to <b>{p.scope}</b></div>
+                    <div className="nom-fact">“{p.fact}”</div>
+                    <div className="nom-meta">suggested by {p.proposedBy} · from {p.sourceProject}</div>
+                    <div className="nom-actions">
+                      <button className="promote" onClick={() => approveProp(p.id)}>Approve &amp; save</button>
+                      <button className="reject" onClick={() => dismissProp(p.id)}>Dismiss</button>
+                    </div>
+                  </div>
+                ))}
+
+                {nominations.length > 0 && <div className="ctx-h">⬆ Promotions ({nominations.length})</div>}
+                {nominations.map((n) => (
+                  <div key={n.id} className="nom">
+                    <div className="nom-target">promote to <b>{n.targetScope}</b></div>
+                    <div className="nom-fact">“{n.fact}”</div>
+                    <div className="nom-meta">nominated by {n.nominatedBy} · from {n.sourceProject} · {n.reason}</div>
+                    <button className="mini" onClick={() => doAbstract(n.id)}>Abstract &amp; leak-check</button>
+                    {abstracts[n.id] && (
+                      <>
+                        {abstracts[n.id].leak?.flagged && (
+                          <div className="leak">
+                            ⚠ possible client detail: {abstracts[n.id].leak!.hits.join(", ")} — edit before promoting
+                          </div>
+                        )}
+                        <textarea
+                          className="nom-edit"
+                          value={abstracts[n.id].text}
+                          onChange={(e) => setAbstracts((a) => ({ ...a, [n.id]: { ...a[n.id], text: e.target.value } }))}
+                        />
+                      </>
+                    )}
+                    <div className="nom-actions">
+                      <button className="promote" onClick={() => doPromote(n.id)}>
+                        Promote{abstracts[n.id] ? " (abstracted)" : " as-is"}
+                      </button>
+                      <button className="reject" onClick={() => doReject(n.id)}>Reject</button>
+                    </div>
+                  </div>
+                ))}
+
+                {signals.length > 0 && (
+                  <div className="signals">
+                    <div className="ctx-h">Signals accumulating (implicit)</div>
+                    {signals.map((s) => (
+                      <div key={s.pattern} className="sig">
+                        <div className="sig-top">
+                          <b>{s.pattern}</b>
+                          <span className="sig-count">
+                            {s.count}/{signalThreshold}{s.nominated ? " · nominated ✓" : ""}
+                          </span>
+                        </div>
+                        <div className="sig-bar">
+                          <div className="sig-fill" style={{ width: `${Math.min(100, (s.count / signalThreshold) * 100)}%` }} />
+                        </div>
+                        <div className="sig-obs">{s.lastObservation}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+              )}
             </div>
           </div>
         </div>

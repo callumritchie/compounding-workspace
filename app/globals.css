@@ -368,3 +368,12 @@ html, body {
 .agent-prompt { min-height: 160px; resize: vertical; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit; font-weight: 400; color: var(--ink); background: var(--bg); line-height: 1.5; }
 .tool-checks { display: flex; flex-wrap: wrap; gap: 8px; font-weight: 400; }
 .tool-check { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+
+/* Memory manager: Library | Pending tabs */
+.modal-tabs { display: flex; gap: 6px; padding: 0 4px 10px; border-bottom: 1px solid var(--border); }
+.modal-tabs button { border: 1px solid var(--border); background: var(--bg); border-radius: 999px; padding: 4px 14px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); }
+.modal-tabs button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+/* Inline accept/decline on a chat suggestion chip */
+.chip-actions { display: inline-flex; gap: 4px; }
+.chip-done { font-size: 11px; color: var(--muted); }
+.mem-chip .ghost { background: transparent; color: var(--muted); }
