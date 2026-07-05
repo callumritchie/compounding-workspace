@@ -219,10 +219,16 @@ html, body {
 .mem-chip button:hover { opacity: 0.75; }
 
 /* Memory manager (modal) */
-.mem-group { margin-bottom: 14px; }
+/* Lattice-level sections in the memory manager */
+.mem-level { margin-bottom: 18px; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 4px; background: var(--panel); }
+.mem-level-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.mem-level-name { font-weight: 700; font-size: 13px; letter-spacing: 0.02em; text-transform: uppercase; color: var(--accent); }
+.mem-level-gloss { font-size: 12px; color: var(--muted); flex: 1 1 auto; }
+.mem-level-count { font-size: 12px; color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
 .mem-card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--bg); }
 .mem-card.retracted { opacity: 0.55; }
 .mem-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 12px; }
+.mem-meta .mem-scope { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 6px; }
 .mem-meta .mem-id { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 11px; margin-left: auto; }
 .pill.conf { background: #fde68a; color: #92400e; }
 .pill.ret { background: #fecaca; color: #991b1b; }

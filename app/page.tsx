@@ -694,7 +694,7 @@ export default function Home() {
             💡 Suggested{proposals.length ? ` (${proposals.length})` : ""}
           </button>
           <button className="queue-btn" onClick={() => { loadMemories(); setShowMemory(true); }}>
-            🧠 Memory
+            🧠 Memory manager
           </button>
           <div className="user-switch">
             <span className="subtitle">You are:</span>
@@ -1022,25 +1022,46 @@ export default function Home() {
         <div className="modal-overlay" onClick={() => setShowMemory(false)}>
           <div className="modal wide" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
-              <h2>Memory library</h2>
+              <h2>🧠 Memory manager</h2>
               <button onClick={() => setShowMemory(false)}>×</button>
             </div>
             <div className="modal-body">
               <div className="empty">
-                Every memory across all scopes. The glass box shows the subset injected each turn — this is
-                where you curate the whole library. Editing here changes the file on disk.
+                Every memory, grouped by where it lives on the scope lattice — broad (whole firm) at the top,
+                specific (one person) at the bottom. A message&apos;s ▸ x-ray shows the subset injected that turn;
+                this is where you curate the whole library. Editing here changes the file on disk.
               </div>
               {memNote && <div className="ctx-item">{memNote}</div>}
               {allMemories.length === 0 && <div className="empty">No memories yet.</div>}
               {(() => {
-                const grouped = allMemories.reduce<Record<string, MemItem[]>>((acc, m) => {
-                  (acc[m.scope] ||= []).push(m);
+                // Group by lattice LEVEL (the scope's first segment), then render
+                // the levels broad → specific with a labelled, divided section each.
+                const LEVELS: { key: string; label: string; gloss: string }[] = [
+                  { key: "company", label: "Company", gloss: "firm-wide — applies to everyone" },
+                  { key: "sector", label: "Sector", gloss: "everyone working in this industry" },
+                  { key: "client", label: "Client", gloss: "all of this client's projects" },
+                  { key: "stakeholder", label: "Stakeholder", gloss: "one person — follows them across projects" },
+                  { key: "project", label: "Project", gloss: "this engagement only" },
+                  { key: "personal", label: "Personal", gloss: "just this user" },
+                ];
+                const byLevel = allMemories.reduce<Record<string, MemItem[]>>((acc, m) => {
+                  (acc[m.scope.split("/")[0]] ||= []).push(m);
                   return acc;
                 }, {});
-                return Object.keys(grouped).sort().map((scope) => (
-                  <div key={scope} className="mem-group">
-                    <div className="ctx-h">{scope}</div>
-                    {grouped[scope].map((m) => {
+                const known = LEVELS.map((l) => l.key);
+                const extras = Object.keys(byLevel)
+                  .filter((k) => !known.includes(k))
+                  .map((k) => ({ key: k, label: k, gloss: "" }));
+                return [...LEVELS, ...extras]
+                  .filter((lvl) => byLevel[lvl.key]?.length)
+                  .map((lvl) => (
+                  <div key={lvl.key} className="mem-level">
+                    <div className="mem-level-head">
+                      <span className="mem-level-name">{lvl.label}</span>
+                      <span className="mem-level-gloss">{lvl.gloss}</span>
+                      <span className="mem-level-count">{byLevel[lvl.key].length}</span>
+                    </div>
+                    {byLevel[lvl.key].map((m) => {
                       const key = `${m.scope}:${m.id}`;
                       const d = memDraft[key] ?? { body: m.body, importance: m.importance };
                       const retracted = m.status === "retracted";
@@ -1048,6 +1069,7 @@ export default function Home() {
                       return (
                         <div key={key} className={`mem-card ${retracted ? "retracted" : ""}`}>
                           <div className="mem-meta">
+                            <span className="mem-scope">{m.scope}</span>
                             <span className={`pill ${isConstitution ? "stable" : "ranked"}`}>{m.type}</span>
                             {m.confidential && <span className="pill conf">confidential</span>}
                             {retracted && <span className="pill ret">retracted</span>}
