@@ -22,6 +22,7 @@ type TraceEntry = { tool: string; input: Record<string, unknown>; summary: strin
 type Injected = { id: string; scope: string; type: string; tier: string; tokens: number };
 type Dropped = { id: string; scope: string; reason: string };
 type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
+type CompPart = { label: string; tokens: number; tier: string };
 type ContextReport = {
   injected: Injected[];
   dropped: Dropped[];
@@ -29,7 +30,12 @@ type ContextReport = {
   volatileTokens: number;
   budgets: { stable: number; ranked: number };
   usage: Usage;
+  composition?: CompPart[];
 };
+
+// Fixed palette so each input-composition segment keeps the same colour
+// between the bar and its legend.
+const COMP_COLORS = ["#6366f1", "#8b5cf6", "#0ea5e9", "#f59e0b", "#10b981", "#ef4444", "#ec4899"];
 
 type Nomination = {
   id: string;
@@ -433,6 +439,35 @@ export default function Home() {
                     ))}
                   </>
                 )}
+
+                {context.composition && context.composition.length > 0 && (() => {
+                  const parts = context.composition;
+                  const total = parts.reduce((s, p) => s + p.tokens, 0) || 1;
+                  return (
+                    <>
+                      <div className="ctx-h">Input composition (~{total}t, estimate)</div>
+                      <div className="tokbar">
+                        {parts.map((p, i) => (
+                          <div
+                            key={p.label}
+                            className="seg"
+                            style={{ width: `${(p.tokens / total) * 100}%`, background: COMP_COLORS[i % COMP_COLORS.length] }}
+                            title={`${p.label}: ~${p.tokens}t (${p.tier})`}
+                          />
+                        ))}
+                      </div>
+                      <div className="toklegend">
+                        {parts.map((p, i) => (
+                          <span key={p.label} className="legitem">
+                            <span className="swatch" style={{ background: COMP_COLORS[i % COMP_COLORS.length] }} />
+                            {p.tier === "cached" ? "🔒 " : ""}{p.label} ~{p.tokens}t
+                          </span>
+                        ))}
+                      </div>
+                      <div className="tokcap">🔒 cached prefix is reused for free next turn; the rest is re-sent every turn.</div>
+                    </>
+                  );
+                })()}
 
                 <div className="ctx-h">Token budget (estimate)</div>
                 <div className="ctx-item">

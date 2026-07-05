@@ -44,6 +44,7 @@ export type ContextReport = {
 
 export type AssembledContext = {
   stableBlock: string; // constitution + high-importance learned (cacheable)
+  rankedBlock: string; // lower-importance learned memory (not cached) — split out for the composition view
   volatileBlock: string; // ranked memory + working context (not cached)
   report: ContextReport;
 };
@@ -105,6 +106,7 @@ export function assembleContext(memories: Memory[], workingContext: string): Ass
 
   return {
     stableBlock,
+    rankedBlock,
     volatileBlock,
     report: {
       injected,

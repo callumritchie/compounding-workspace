@@ -168,6 +168,15 @@ html, body {
 .msg.assistant { align-self: flex-start; background: var(--bg); border: 1px solid var(--border); }
 .msg .role { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
 
+/* Input-token composition bar (glass box) */
+.tokbar { display: flex; width: 100%; height: 14px; border-radius: 4px; overflow: hidden; margin: 2px 0 6px; background: var(--panel); }
+.tokbar .seg { height: 100%; }
+.tokbar .seg + .seg { border-left: 1px solid var(--panel); }
+.toklegend { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 11px; margin-bottom: 4px; }
+.toklegend .legitem { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
+.toklegend .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; flex: none; }
+.tokcap { font-size: 11px; color: var(--muted); }
+
 /* Rendered markdown in assistant messages */
 .markdown { white-space: normal; }
 .markdown > *:first-child { margin-top: 0; }

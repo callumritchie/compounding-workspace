@@ -10,10 +10,11 @@
 */
 
 import { getHistory, saveHistory, isUser, type Message } from "@/lib/workspace";
-import { respond } from "@/lib/agent";
+import { respond, SYSTEM_BASE } from "@/lib/agent";
 import { buildWorkingContext } from "@/lib/context";
-import { assembleContext } from "@/lib/assemble";
+import { assembleContext, estimateTokens } from "@/lib/assemble";
 import { getMemoriesForContext } from "@/lib/memory";
+import { TOOLS } from "@/lib/tools";
 import { listFiles, DEFAULT_PROJECT } from "@/lib/corpus";
 
 export async function POST(req: Request) {
@@ -39,6 +40,21 @@ export async function POST(req: Request) {
   const memories = await getMemoriesForContext(user, project);
   const assembled = assembleContext(memories, workingContext);
 
+  // Break the input prompt into its parts so the glass box can VISUALISE what
+  // fills the context window. The first three parts sit behind the cache
+  // breakpoint (reused free next turn); the rest are re-sent every turn.
+  // (history here excludes the just-added user message, which is its own part.)
+  const priorHistory = history.slice(0, -1).map((m) => m.content).join("\n");
+  const composition = [
+    { label: "Persona", tokens: estimateTokens(SYSTEM_BASE), tier: "cached" },
+    { label: "Tool schemas", tokens: estimateTokens(JSON.stringify(TOOLS)), tier: "cached" },
+    { label: "Stable memory", tokens: estimateTokens(assembled.stableBlock), tier: "cached" },
+    { label: "Ranked memory", tokens: estimateTokens(assembled.rankedBlock), tier: "volatile" },
+    { label: "Working context", tokens: estimateTokens(workingContext), tier: "volatile" },
+    { label: "History", tokens: estimateTokens(priorHistory), tier: "volatile" },
+    { label: "Current message", tokens: estimateTokens(message), tier: "volatile" },
+  ].filter((s) => s.tokens > 0);
+
   let text: string;
   let trace;
   let usage;
@@ -59,6 +75,6 @@ export async function POST(req: Request) {
   await saveHistory(user, history);
 
   const files = await listFiles(project);
-  const context = { ...assembled.report, usage };
+  const context = { ...assembled.report, usage, composition };
   return Response.json({ history, trace, files, context });
 }

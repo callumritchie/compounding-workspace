@@ -21,7 +21,8 @@ import { TOOLS, executeTool, type TraceEntry } from "./tools";
 const MODEL = "claude-opus-4-8";
 
 // Stable persona + how to use the tools. Kept stable so it can be cached later.
-const SYSTEM_BASE = `You are an AI teammate inside a consulting team's shared workspace.
+// Exported so the chat route can estimate its token weight for the composition bar.
+export const SYSTEM_BASE = `You are an AI teammate inside a consulting team's shared workspace.
 You help consultants think through client projects using the project's files:
 interviews, notes, hypotheses, and research.
 
