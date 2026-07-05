@@ -37,6 +37,17 @@ type ContextReport = {
 // between the bar and its legend.
 const COMP_COLORS = ["#6366f1", "#8b5cf6", "#0ea5e9", "#f59e0b", "#10b981", "#ef4444", "#ec4899"];
 
+// A memory as shown in the manager (the whole library, incl. retracted).
+type MemItem = {
+  id: string;
+  scope: string;
+  type: string;
+  importance: number;
+  status: string;
+  confidential?: boolean;
+  body: string;
+};
+
 type Nomination = {
   id: string;
   fact: string;
@@ -89,6 +100,10 @@ export default function Home() {
   const [comparing, setComparing] = useState(false);
   const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [showMemory, setShowMemory] = useState(false);
+  const [allMemories, setAllMemories] = useState<MemItem[]>([]);
+  const [memDraft, setMemDraft] = useState<Record<string, { body: string; importance: number }>>({});
+  const [memNote, setMemNote] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -123,6 +138,48 @@ export default function Home() {
       .catch(() => setNominations([]));
   }
   useEffect(loadPromotions, []);
+
+  // ---- Memory manager: load + edit the whole library ----
+  function loadMemories() {
+    fetch("/api/memory/list")
+      .then((r) => r.json())
+      .then((d) => {
+        const mems: MemItem[] = d.memories ?? [];
+        setAllMemories(mems);
+        const draft: Record<string, { body: string; importance: number }> = {};
+        for (const m of mems) draft[`${m.scope}:${m.id}`] = { body: m.body, importance: m.importance };
+        setMemDraft(draft);
+      })
+      .catch(() => setAllMemories([]));
+  }
+  async function saveMem(m: MemItem) {
+    const d = memDraft[`${m.scope}:${m.id}`];
+    await fetch("/api/memory/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: m.scope, id: m.id, body: d.body, importance: d.importance }),
+    });
+    setMemNote(`saved ${m.scope}/${m.id}`);
+    loadMemories();
+  }
+  async function setMemStatus(m: MemItem, status: string) {
+    await fetch("/api/memory/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: m.scope, id: m.id, status }),
+    });
+    setMemNote(`${status === "retracted" ? "retracted" : "restored"} ${m.scope}/${m.id}`);
+    loadMemories();
+  }
+  async function deleteMem(m: MemItem) {
+    await fetch("/api/memory/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: m.scope, id: m.id }),
+    });
+    setMemNote(`deleted ${m.scope}/${m.id}`);
+    loadMemories();
+  }
 
   // Load the implicit-signal ledger.
   function loadSignals() {
@@ -318,6 +375,9 @@ export default function Home() {
           </button>
           <button className="queue-btn" onClick={() => { loadPromotions(); loadSignals(); setShowQueue(true); }}>
             ⬆ Promotions{nominations.length ? ` (${nominations.length})` : ""}
+          </button>
+          <button className="queue-btn" onClick={() => { loadMemories(); setShowMemory(true); }}>
+            🧠 Memory
           </button>
           <div className="user-switch">
             <span className="subtitle">You are:</span>
@@ -637,6 +697,95 @@ export default function Home() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Memory manager (modal) ---- */}
+      {showMemory && (
+        <div className="modal-overlay" onClick={() => setShowMemory(false)}>
+          <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h2>Memory library</h2>
+              <button onClick={() => setShowMemory(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="empty">
+                Every memory across all scopes. The glass box shows the subset injected each turn — this is
+                where you curate the whole library. Editing here changes the file on disk.
+              </div>
+              {memNote && <div className="ctx-item">{memNote}</div>}
+              {allMemories.length === 0 && <div className="empty">No memories yet.</div>}
+              {(() => {
+                const grouped = allMemories.reduce<Record<string, MemItem[]>>((acc, m) => {
+                  (acc[m.scope] ||= []).push(m);
+                  return acc;
+                }, {});
+                return Object.keys(grouped).sort().map((scope) => (
+                  <div key={scope} className="mem-group">
+                    <div className="ctx-h">{scope}</div>
+                    {grouped[scope].map((m) => {
+                      const key = `${m.scope}:${m.id}`;
+                      const d = memDraft[key] ?? { body: m.body, importance: m.importance };
+                      const retracted = m.status === "retracted";
+                      const isConstitution = m.type === "constitution";
+                      return (
+                        <div key={key} className={`mem-card ${retracted ? "retracted" : ""}`}>
+                          <div className="mem-meta">
+                            <span className={`pill ${isConstitution ? "stable" : "ranked"}`}>{m.type}</span>
+                            {m.confidential && <span className="pill conf">confidential</span>}
+                            {retracted && <span className="pill ret">retracted</span>}
+                            <span className="mem-id">{m.id}</span>
+                          </div>
+                          <textarea
+                            className="mem-body"
+                            value={d.body}
+                            onChange={(e) =>
+                              setMemDraft((s) => ({ ...s, [key]: { ...d, body: e.target.value } }))
+                            }
+                          />
+                          <div className="mem-controls">
+                            {isConstitution ? (
+                              <span className="imp muted">authoritative · no decay</span>
+                            ) : (
+                              <label className="imp">
+                                importance {d.importance.toFixed(2)}
+                                <input
+                                  type="range"
+                                  min={0}
+                                  max={1}
+                                  step={0.05}
+                                  value={d.importance}
+                                  onChange={(e) =>
+                                    setMemDraft((s) => ({ ...s, [key]: { ...d, importance: Number(e.target.value) } }))
+                                  }
+                                />
+                              </label>
+                            )}
+                            <div className="mem-actions">
+                              <button className="mini" onClick={() => saveMem(m)}>Save</button>
+                              {retracted ? (
+                                <button className="mini" onClick={() => setMemStatus(m, "active")}>Restore</button>
+                              ) : (
+                                <button className="mini" onClick={() => setMemStatus(m, "retracted")}>Retract</button>
+                              )}
+                              <button
+                                className="reject"
+                                onClick={() => {
+                                  if (confirm(`Delete "${m.id}"? This removes the file permanently.`)) deleteMem(m);
+                                }}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ));
+              })()}
             </div>
           </div>
         </div>

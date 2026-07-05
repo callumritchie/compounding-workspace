@@ -168,9 +168,13 @@ async function updateMemoryFrontmatter(
 ): Promise<boolean> {
   const file = await findMemoryFile(scope, id);
   if (!file) return false;
-  const { data, content } = matter(await fs.readFile(file, "utf8"));
+  const parsed = matter(await fs.readFile(file, "utf8"));
+  // gray-matter caches parsed results by input string and returns the SAME data
+  // object each time — so we clone before mutating, or we'd poison that cache and
+  // make later reads report stale importance/status (disk stays correct).
+  const data = { ...parsed.data };
   mutate(data);
-  await fs.writeFile(file, matter.stringify(content, data), "utf8");
+  await fs.writeFile(file, matter.stringify(parsed.content, data), "utf8");
   return true;
 }
 
@@ -191,4 +195,75 @@ export async function retractMemory(scope: string, id: string): Promise<boolean>
   return updateMemoryFrontmatter(scope, id, (data) => {
     data.status = "retracted";
   });
+}
+
+/* --- Memory manager: browse + curate the whole library ---------------------
+   The manager needs EVERY memory, including retracted ones (so you can restore
+   them), grouped by scope. readMemoriesInScope hides retracted for injection;
+   this walks the tree and keeps them. Folders starting with "_" (e.g. the
+   _promotion_queue) are internal, not memories, so we skip them. */
+export async function listAllMemories(): Promise<Memory[]> {
+  const out: Memory[] = [];
+  async function walk(rel: string): Promise<void> {
+    const dir = path.join(MEM_ROOT, rel);
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.name.startsWith("_")) continue; // internal folders (promotion queue, etc.)
+      const childRel = rel ? path.join(rel, e.name) : e.name;
+      if (e.isDirectory()) {
+        await walk(childRel);
+        continue;
+      }
+      if (!e.name.endsWith(".md")) continue;
+      const { data, content } = matter(await fs.readFile(path.join(dir, e.name), "utf8"));
+      out.push({
+        id: String(data.id ?? e.name.replace(/\.md$/, "")),
+        scope: rel,
+        type: data.type === "learned" ? "learned" : "constitution",
+        importance: typeof data.importance === "number" ? data.importance : 0.3,
+        confidential: Boolean(data.confidential),
+        appliesTo: data.applies_to,
+        provenance: data.provenance,
+        status: data.status ? String(data.status) : "active",
+        body: content.trim(),
+        file: path.join(dir, e.name),
+      });
+    }
+  }
+  await walk("");
+  return out;
+}
+
+// Edit a memory from the manager: any of body / importance / status. Importance
+// is clamped to [0, 1]; status "active" un-retracts. Constitution can be edited
+// too (it's authored), but the UI flags it as authoritative.
+export async function updateMemory(
+  scope: string,
+  id: string,
+  patch: { body?: string; importance?: number; status?: string }
+): Promise<boolean> {
+  const file = await findMemoryFile(scope, id);
+  if (!file) return false;
+  const parsed = matter(await fs.readFile(file, "utf8"));
+  const data = { ...parsed.data }; // clone — don't poison gray-matter's cache (see updateMemoryFrontmatter)
+  if (typeof patch.importance === "number") {
+    data.importance = Math.max(0, Math.min(1, Number(patch.importance.toFixed(3))));
+  }
+  if (patch.status) data.status = patch.status;
+  const body = patch.body !== undefined ? patch.body.trim() : parsed.content.trim();
+  await fs.writeFile(file, matter.stringify(`${body}\n`, data), "utf8");
+  return true;
+}
+
+// Permanently delete a memory file.
+export async function deleteMemory(scope: string, id: string): Promise<boolean> {
+  const file = await findMemoryFile(scope, id);
+  if (!file) return false;
+  await fs.unlink(file);
+  return true;
 }

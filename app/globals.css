@@ -177,6 +177,20 @@ html, body {
 .toklegend .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; flex: none; }
 .tokcap { font-size: 11px; color: var(--muted); }
 
+/* Memory manager (modal) */
+.mem-group { margin-bottom: 14px; }
+.mem-card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--bg); }
+.mem-card.retracted { opacity: 0.55; }
+.mem-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 12px; }
+.mem-meta .mem-id { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 11px; margin-left: auto; }
+.pill.conf { background: #fde68a; color: #92400e; }
+.pill.ret { background: #fecaca; color: #991b1b; }
+.mem-body { width: 100%; min-height: 56px; resize: vertical; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: inherit; }
+.mem-controls { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
+.mem-controls .imp { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.mem-controls .imp input[type="range"] { width: 120px; }
+.mem-actions { display: flex; gap: 6px; }
+
 /* Rendered markdown in assistant messages */
 .markdown { white-space: normal; }
 .markdown > *:first-child { margin-top: 0; }
