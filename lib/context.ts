@@ -10,10 +10,15 @@
    never full file bodies (the agent can read those with a tool if it wants).
 --------------------------------------------------------------------------- */
 
+export type OtherTab = { title: string; openFile?: string | null; lastActivity?: string };
+
 export type WorkingContext = {
   projectId: string;
   openFile?: string | null;
   recentActions?: string[];
+  // What the SAME user is doing in their OTHER open chat tabs (parallel tasks).
+  // Compact by design — a title + open file + last message, never full history.
+  otherTabs?: OtherTab[];
 };
 
 export function buildWorkingContext(wc: WorkingContext): string {
@@ -25,5 +30,20 @@ export function buildWorkingContext(wc: WorkingContext): string {
   // Keep only the last few actions so this block stays small.
   const actions = (wc.recentActions ?? []).slice(-6);
   if (actions.length) lines.push(`- Recent actions: ${actions.join("; ")}`);
+
+  // Cross-tab awareness: let this chat know what the user's other tabs are for,
+  // so it can coordinate ("your other tab is drafting the CFO memo") without
+  // seeing their full conversations.
+  const tabs = (wc.otherTabs ?? []).filter((t) => t.title || t.lastActivity).slice(0, 6);
+  if (tabs.length) {
+    lines.push("");
+    lines.push("OTHER OPEN TABS (this same user's parallel chats — for awareness; don't conflate them with this one):");
+    for (const t of tabs) {
+      const bits = [`"${t.title || "untitled"}"`];
+      if (t.openFile) bits.push(`file: ${t.openFile}`);
+      if (t.lastActivity) bits.push(`last: "${t.lastActivity.slice(0, 80)}"`);
+      lines.push(`- ${bits.join(" · ")}`);
+    }
+  }
   return lines.join("\n");
 }

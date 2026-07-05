@@ -13,6 +13,8 @@
 --------------------------------------------------------------------------- */
 
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type Message = { role: "user" | "assistant"; content: string };
 type User = "alice" | "bob";
@@ -20,6 +22,7 @@ type TraceEntry = { tool: string; input: Record<string, unknown>; summary: strin
 type Injected = { id: string; scope: string; type: string; tier: string; tokens: number };
 type Dropped = { id: string; scope: string; reason: string };
 type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
+type CompPart = { label: string; tokens: number; tier: string };
 type ContextReport = {
   injected: Injected[];
   dropped: Dropped[];
@@ -27,6 +30,25 @@ type ContextReport = {
   volatileTokens: number;
   budgets: { stable: number; ranked: number };
   usage: Usage;
+  composition?: CompPart[];
+};
+
+// Fixed palette so each input-composition segment keeps the same colour
+// between the bar and its legend.
+const COMP_COLORS = ["#6366f1", "#8b5cf6", "#0ea5e9", "#f59e0b", "#10b981", "#ef4444", "#ec4899"];
+
+// One chat tab's metadata (mirrors lib/workspace ChatMeta).
+type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessage?: string; openFile?: string | null };
+
+// A memory as shown in the manager (the whole library, incl. retracted).
+type MemItem = {
+  id: string;
+  scope: string;
+  type: string;
+  importance: number;
+  status: string;
+  confidential?: boolean;
+  body: string;
 };
 
 type Nomination = {
@@ -57,6 +79,8 @@ type Signal = {
 export default function Home() {
   const [user, setUser] = useState<User>("alice");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [chats, setChats] = useState<ChatMeta[]>([]);
+  const [activeChat, setActiveChat] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -81,6 +105,10 @@ export default function Home() {
   const [comparing, setComparing] = useState(false);
   const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [showMemory, setShowMemory] = useState(false);
+  const [allMemories, setAllMemories] = useState<MemItem[]>([]);
+  const [memDraft, setMemDraft] = useState<Record<string, { body: string; importance: number }>>({});
+  const [memNote, setMemNote] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -115,6 +143,48 @@ export default function Home() {
       .catch(() => setNominations([]));
   }
   useEffect(loadPromotions, []);
+
+  // ---- Memory manager: load + edit the whole library ----
+  function loadMemories() {
+    fetch("/api/memory/list")
+      .then((r) => r.json())
+      .then((d) => {
+        const mems: MemItem[] = d.memories ?? [];
+        setAllMemories(mems);
+        const draft: Record<string, { body: string; importance: number }> = {};
+        for (const m of mems) draft[`${m.scope}:${m.id}`] = { body: m.body, importance: m.importance };
+        setMemDraft(draft);
+      })
+      .catch(() => setAllMemories([]));
+  }
+  async function saveMem(m: MemItem) {
+    const d = memDraft[`${m.scope}:${m.id}`];
+    await fetch("/api/memory/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: m.scope, id: m.id, body: d.body, importance: d.importance }),
+    });
+    setMemNote(`saved ${m.scope}/${m.id}`);
+    loadMemories();
+  }
+  async function setMemStatus(m: MemItem, status: string) {
+    await fetch("/api/memory/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: m.scope, id: m.id, status }),
+    });
+    setMemNote(`${status === "retracted" ? "retracted" : "restored"} ${m.scope}/${m.id}`);
+    loadMemories();
+  }
+  async function deleteMem(m: MemItem) {
+    await fetch("/api/memory/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: m.scope, id: m.id }),
+    });
+    setMemNote(`deleted ${m.scope}/${m.id}`);
+    loadMemories();
+  }
 
   // Load the implicit-signal ledger.
   function loadSignals() {
@@ -174,15 +244,99 @@ export default function Home() {
     setNominations((ns) => ns.filter((n) => n.id !== id));
   }
 
-  // Load THIS user's private history when we switch user.
-  useEffect(() => {
-    fetch(`/api/history?user=${user}`)
-      .then((r) => r.json())
-      .then((d) => setMessages(d.history ?? []))
-      .catch(() => setMessages([]));
+  // ---- Chat tabs (concurrent tasks; memory + files stay shared) ----
+  // Open a tab: load its messages, reset the per-tab session view.
+  async function openChatMeta(meta: ChatMeta) {
+    setActiveChat(meta.chatId);
     setTrace([]);
     setContext(null);
     setFeedbackNote(null);
+    setRecentActions([]);
+    setOpenFile(null);
+    setOpenContent("");
+    const d = await fetch(`/api/history?user=${user}&chat=${meta.chatId}`).then((r) => r.json()).catch(() => ({}));
+    setMessages(d.history ?? []);
+  }
+
+  async function refreshChats(): Promise<ChatMeta[]> {
+    const list: ChatMeta[] = await fetch(`/api/chats?user=${user}`)
+      .then((r) => r.json())
+      .then((d) => d.chats ?? [])
+      .catch(() => []);
+    setChats(list);
+    return list;
+  }
+
+  async function newChat() {
+    const created = await fetch("/api/chats", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user }),
+    }).then((r) => r.json());
+    if (created.chat) {
+      await refreshChats();
+      openChatMeta(created.chat);
+    }
+  }
+
+  async function closeChat(meta: ChatMeta) {
+    await fetch("/api/chats/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user, chatId: meta.chatId }),
+    });
+    let list = await refreshChats();
+    if (list.length === 0) {
+      const created = await fetch("/api/chats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user }),
+      }).then((r) => r.json());
+      list = await refreshChats();
+      if (created.chat) openChatMeta(created.chat);
+      return;
+    }
+    if (activeChat === meta.chatId) openChatMeta(list[0]);
+  }
+
+  async function clearActiveChat() {
+    if (!activeChat) return;
+    await fetch("/api/chats/clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user, chatId: activeChat }),
+    });
+    setMessages([]);
+    setTrace([]);
+    setContext(null);
+    setFeedbackNote(null);
+    refreshChats();
+  }
+
+  // On user switch: load their tabs (create one if none), open the first.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let list: ChatMeta[] = await fetch(`/api/chats?user=${user}`)
+        .then((r) => r.json())
+        .then((d) => d.chats ?? [])
+        .catch(() => []);
+      if (list.length === 0) {
+        const created = await fetch("/api/chats", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user }),
+        }).then((r) => r.json());
+        list = created.chat ? [created.chat] : [];
+      }
+      if (cancelled) return;
+      setChats(list);
+      if (list[0]) openChatMeta(list[0]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   useEffect(() => {
@@ -225,7 +379,7 @@ export default function Home() {
 
   async function send() {
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || loading || !activeChat) return;
 
     setMessages((m) => [...m, { role: "user", content: text }]);
     setInput("");
@@ -236,7 +390,7 @@ export default function Home() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user, message: text, project, openFile, recentActions }),
+        body: JSON.stringify({ user, message: text, project, openFile, recentActions, chatId: activeChat }),
       });
       const data = await res.json();
       if (data.history) {
@@ -246,6 +400,7 @@ export default function Home() {
         if (data.files) setFiles(data.files);
         loadPromotions(); // the agent may have nominated a lesson this turn
         loadSignals(); // ...or logged a recurring signal
+        refreshChats(); // the tab's title + last-activity may have changed
         noteAction(`asked "${text.slice(0, 40)}${text.length > 40 ? "…" : ""}"`);
       } else {
         setMessages((m) => [...m, { role: "assistant", content: `⚠️ ${data.error}` }]);
@@ -311,6 +466,9 @@ export default function Home() {
           <button className="queue-btn" onClick={() => { loadPromotions(); loadSignals(); setShowQueue(true); }}>
             ⬆ Promotions{nominations.length ? ` (${nominations.length})` : ""}
           </button>
+          <button className="queue-btn" onClick={() => { loadMemories(); setShowMemory(true); }}>
+            🧠 Memory
+          </button>
           <div className="user-switch">
             <span className="subtitle">You are:</span>
             <button className={`alice ${user === "alice" ? "active" : ""}`} onClick={() => setUser("alice")}>Alice</button>
@@ -354,6 +512,32 @@ export default function Home() {
             Chat · private to {user}
             {openFile && <span className="badge">this → {openFile.split("/").pop()}</span>}
           </div>
+          <div className="tabbar">
+            {chats.map((c) => (
+              <div
+                key={c.chatId}
+                className={`tab ${c.chatId === activeChat ? "active" : ""}`}
+                onClick={() => openChatMeta(c)}
+                title={c.title}
+              >
+                <span className="tab-title">{c.title || "New chat"}</span>
+                {chats.length > 1 && (
+                  <button
+                    className="tab-x"
+                    title="close tab"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      closeChat(c);
+                    }}
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            ))}
+            <button className="tab-new" title="new chat" onClick={newChat}>＋</button>
+            <button className="tab-clear" title="clear this chat" onClick={clearActiveChat}>Clear</button>
+          </div>
           <div className="chat">
             <div className="messages">
               {messages.length === 0 && (
@@ -365,7 +549,13 @@ export default function Home() {
               {messages.map((m, i) => (
                 <div key={i} className={`msg ${m.role}`}>
                   <div className="role">{m.role === "user" ? user : "agent"}</div>
-                  {m.content}
+                  {m.role === "assistant" ? (
+                    <div className="markdown">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    m.content
+                  )}
                 </div>
               ))}
               {loading && (
@@ -425,6 +615,35 @@ export default function Home() {
                     ))}
                   </>
                 )}
+
+                {context.composition && context.composition.length > 0 && (() => {
+                  const parts = context.composition;
+                  const total = parts.reduce((s, p) => s + p.tokens, 0) || 1;
+                  return (
+                    <>
+                      <div className="ctx-h">Input composition (~{total}t, estimate)</div>
+                      <div className="tokbar">
+                        {parts.map((p, i) => (
+                          <div
+                            key={p.label}
+                            className="seg"
+                            style={{ width: `${(p.tokens / total) * 100}%`, background: COMP_COLORS[i % COMP_COLORS.length] }}
+                            title={`${p.label}: ~${p.tokens}t (${p.tier})`}
+                          />
+                        ))}
+                      </div>
+                      <div className="toklegend">
+                        {parts.map((p, i) => (
+                          <span key={p.label} className="legitem">
+                            <span className="swatch" style={{ background: COMP_COLORS[i % COMP_COLORS.length] }} />
+                            {p.tier === "cached" ? "🔒 " : ""}{p.label} ~{p.tokens}t
+                          </span>
+                        ))}
+                      </div>
+                      <div className="tokcap">🔒 cached prefix is reused for free next turn; the rest is re-sent every turn.</div>
+                    </>
+                  );
+                })()}
 
                 <div className="ctx-h">Token budget (estimate)</div>
                 <div className="ctx-item">
@@ -594,6 +813,95 @@ export default function Home() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Memory manager (modal) ---- */}
+      {showMemory && (
+        <div className="modal-overlay" onClick={() => setShowMemory(false)}>
+          <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h2>Memory library</h2>
+              <button onClick={() => setShowMemory(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="empty">
+                Every memory across all scopes. The glass box shows the subset injected each turn — this is
+                where you curate the whole library. Editing here changes the file on disk.
+              </div>
+              {memNote && <div className="ctx-item">{memNote}</div>}
+              {allMemories.length === 0 && <div className="empty">No memories yet.</div>}
+              {(() => {
+                const grouped = allMemories.reduce<Record<string, MemItem[]>>((acc, m) => {
+                  (acc[m.scope] ||= []).push(m);
+                  return acc;
+                }, {});
+                return Object.keys(grouped).sort().map((scope) => (
+                  <div key={scope} className="mem-group">
+                    <div className="ctx-h">{scope}</div>
+                    {grouped[scope].map((m) => {
+                      const key = `${m.scope}:${m.id}`;
+                      const d = memDraft[key] ?? { body: m.body, importance: m.importance };
+                      const retracted = m.status === "retracted";
+                      const isConstitution = m.type === "constitution";
+                      return (
+                        <div key={key} className={`mem-card ${retracted ? "retracted" : ""}`}>
+                          <div className="mem-meta">
+                            <span className={`pill ${isConstitution ? "stable" : "ranked"}`}>{m.type}</span>
+                            {m.confidential && <span className="pill conf">confidential</span>}
+                            {retracted && <span className="pill ret">retracted</span>}
+                            <span className="mem-id">{m.id}</span>
+                          </div>
+                          <textarea
+                            className="mem-body"
+                            value={d.body}
+                            onChange={(e) =>
+                              setMemDraft((s) => ({ ...s, [key]: { ...d, body: e.target.value } }))
+                            }
+                          />
+                          <div className="mem-controls">
+                            {isConstitution ? (
+                              <span className="imp muted">authoritative · no decay</span>
+                            ) : (
+                              <label className="imp">
+                                importance {d.importance.toFixed(2)}
+                                <input
+                                  type="range"
+                                  min={0}
+                                  max={1}
+                                  step={0.05}
+                                  value={d.importance}
+                                  onChange={(e) =>
+                                    setMemDraft((s) => ({ ...s, [key]: { ...d, importance: Number(e.target.value) } }))
+                                  }
+                                />
+                              </label>
+                            )}
+                            <div className="mem-actions">
+                              <button className="mini" onClick={() => saveMem(m)}>Save</button>
+                              {retracted ? (
+                                <button className="mini" onClick={() => setMemStatus(m, "active")}>Restore</button>
+                              ) : (
+                                <button className="mini" onClick={() => setMemStatus(m, "retracted")}>Retract</button>
+                              )}
+                              <button
+                                className="reject"
+                                onClick={() => {
+                                  if (confirm(`Delete "${m.id}"? This removes the file permanently.`)) deleteMem(m);
+                                }}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ));
+              })()}
             </div>
           </div>
         </div>
