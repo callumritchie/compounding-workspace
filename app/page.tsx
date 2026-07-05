@@ -321,15 +321,16 @@ export default function Home() {
         .then((r) => r.json())
         .then((d) => d.chats ?? [])
         .catch(() => []);
+      if (cancelled) return; // a superseded run (e.g. StrictMode double-mount) must not create a tab
       if (list.length === 0) {
         const created = await fetch("/api/chats", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ user }),
         }).then((r) => r.json());
+        if (cancelled) return;
         list = created.chat ? [created.chat] : [];
       }
-      if (cancelled) return;
       setChats(list);
       if (list[0]) openChatMeta(list[0]);
     })();
@@ -513,29 +514,31 @@ export default function Home() {
             {openFile && <span className="badge">this → {openFile.split("/").pop()}</span>}
           </div>
           <div className="tabbar">
-            {chats.map((c) => (
-              <div
-                key={c.chatId}
-                className={`tab ${c.chatId === activeChat ? "active" : ""}`}
-                onClick={() => openChatMeta(c)}
-                title={c.title}
-              >
-                <span className="tab-title">{c.title || "New chat"}</span>
-                {chats.length > 1 && (
-                  <button
-                    className="tab-x"
-                    title="close tab"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      closeChat(c);
-                    }}
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-            ))}
-            <button className="tab-new" title="new chat" onClick={newChat}>＋</button>
+            <div className="tabs">
+              {chats.map((c) => (
+                <div
+                  key={c.chatId}
+                  className={`tab ${c.chatId === activeChat ? "active" : ""}`}
+                  onClick={() => openChatMeta(c)}
+                  title={c.title}
+                >
+                  <span className="tab-title">{c.title || "New chat"}</span>
+                  {chats.length > 1 && (
+                    <button
+                      className="tab-x"
+                      title="close tab"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeChat(c);
+                      }}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button className="tab-new" title="start a new chat" onClick={newChat}>＋ New</button>
             <button className="tab-clear" title="clear this chat" onClick={clearActiveChat}>Clear</button>
           </div>
           <div className="chat">
