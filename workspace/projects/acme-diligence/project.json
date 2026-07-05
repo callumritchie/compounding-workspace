@@ -1,0 +1,8 @@
+{
+  "id": "acme-diligence",
+  "name": "Acquisition diligence",
+  "client": "acme",
+  "sector": "healthcare",
+  "type": "diligence",
+  "status": "complete"
+}

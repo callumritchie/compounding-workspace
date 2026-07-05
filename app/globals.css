@@ -178,15 +178,43 @@ html, body {
 .tokcap { font-size: 11px; color: var(--muted); }
 
 /* Chat tabs */
-.tabbar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--border); overflow-x: auto; flex: none; }
-.tabbar .tab { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px 6px 0 0; background: var(--panel); cursor: pointer; font-size: 12px; max-width: 160px; white-space: nowrap; }
+.tabbar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--border); flex: none; }
+.tabbar .tabs { display: flex; align-items: center; gap: 4px; overflow-x: auto; flex: 1 1 auto; min-width: 0; }
+.tabbar .tab { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px 6px 0 0; background: var(--panel); cursor: pointer; font-size: 12px; max-width: 160px; white-space: nowrap; flex: none; }
 .tabbar .tab.active { background: var(--bg); border-bottom-color: var(--bg); font-weight: 600; }
 .tabbar .tab-title { overflow: hidden; text-overflow: ellipsis; }
 .tabbar .tab-x { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0; }
 .tabbar .tab-x:hover { color: var(--danger, #ef4444); }
-.tabbar .tab-new { border: 1px solid var(--border); background: var(--panel); border-radius: 6px; cursor: pointer; font-size: 14px; line-height: 1; padding: 3px 8px; }
-.tabbar .tab-clear { margin-left: auto; border: 1px solid var(--border); background: var(--panel); border-radius: 6px; cursor: pointer; font-size: 12px; padding: 3px 8px; color: var(--muted); }
+/* New/Clear live OUTSIDE the scrollable .tabs, so they stay visible however many tabs there are */
+.tabbar .tab-new, .tabbar .tab-clear { flex: none; border: 1px solid var(--border); background: var(--panel); border-radius: 6px; cursor: pointer; line-height: 1; padding: 4px 8px; white-space: nowrap; }
+.tabbar .tab-new { font-size: 12px; font-weight: 600; }
+.tabbar .tab-clear { font-size: 12px; color: var(--muted); }
 .tabbar .tab-new:hover, .tabbar .tab-clear:hover { background: var(--bg); }
+
+/* Live "watch it work" view (streaming) */
+.live { display: flex; flex-direction: column; gap: 4px; }
+.live-think { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.4; }
+.live-step { font-size: 12px; line-height: 1.5; }
+
+/* Per-message X-ray */
+.xray-wrap { margin-top: 4px; }
+.xray-toggle { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; padding: 2px 0; }
+.xray-toggle:hover { color: var(--accent); }
+.xray { margin-top: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.xray-h { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); margin: 8px 0 3px; }
+.xray-h:first-child { margin-top: 0; }
+.xray-reason { font-size: 12px; line-height: 1.5; white-space: pre-wrap; color: var(--fg); }
+.xray-tool { margin: 3px 0; }
+.xray-tool-sum { font-size: 12px; }
+.xray-tool-res { font-size: 11px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; white-space: pre-wrap; margin-top: 1px; padding-left: 8px; border-left: 2px solid var(--border); }
+.xray-mem { margin: 4px 0; }
+
+/* Memory-awareness chips (in chat) */
+.mem-chip { align-self: flex-start; max-width: 80%; font-size: 12px; padding: 5px 10px; border-radius: 8px; margin: 1px 0; display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.mem-chip.saved { background: var(--accent-soft); border: 1px solid var(--border); }
+.mem-chip.suggested { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+.mem-chip button { border: 1px solid currentColor; background: transparent; color: inherit; border-radius: 5px; font-size: 11px; padding: 1px 7px; cursor: pointer; }
+.mem-chip button:hover { opacity: 0.75; }
 
 /* Memory manager (modal) */
 .mem-group { margin-bottom: 14px; }

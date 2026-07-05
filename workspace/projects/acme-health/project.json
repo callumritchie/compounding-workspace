@@ -1,6 +1,8 @@
 {
   "id": "acme-health",
+  "name": "Growth strategy",
   "client": "acme",
   "sector": "healthcare",
-  "type": "strategy"
+  "type": "strategy",
+  "status": "in-progress"
 }

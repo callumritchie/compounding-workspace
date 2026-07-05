@@ -29,22 +29,28 @@ inspectable in the glass box.
   including a **stacked input-composition bar** (persona · tools · memory · working context · history) that
   makes the cached-vs-per-turn split visible.
 - **🧠 Memory manager**: browse the whole library by scope, edit text + importance, retract/restore, delete.
-- Reinforcement on **correctness** (👍/👎), retract (✕), applicability tags.
+- Reinforcement on **correctness** (👍/👎), retract, applicability tags.
+- **Hybrid saving**: personal memories save instantly (with a 🧠 chip in chat); shared ones are **💡 suggested**
+  and wait in an approval inbox before they change the team's brain.
 - **Compounding**: the agent nominates a project lesson → you review it in the ⬆ Promotions queue →
   it's abstracted + confidentiality-checked → promoted to a shared scope → future projects start stronger.
-  Implicit **signals** accumulate and auto-nominate once they cross a threshold.
+  Implicit **signals** accumulate and auto-nominate once they cross a threshold. A **client can hold several
+  projects** (in-progress / complete), grouped in the switcher — a completed engagement's client-scope
+  lessons flow into the next.
 
 **Retrieval (RAG)** — large raw files *pulled* on demand:
 - Local embeddings (Transformers.js, in-process), brute-force cosine vector store (JSON).
 - Upload PDFs/text → extracted, chunked, embedded.
 - **⚖ Compare retrieval**: one question, three ways — naïve-vector vs reranked-vector vs agentic — side by side.
 
-Plus: **multi-chat tabs** for concurrent tasks (memory + files shared across tabs; each tab is aware of what
-your other tabs are working on), markdown-rendered responses, Alice/Bob switcher (private chats, shared files
-& memory), working context ("summarise **this**"), and an **eval harness** that gates every change.
+Plus: **live streaming** — watch the agent read files, search, and write its answer in real time — and a
+per-message **▸ x-ray** (click any answer to see the tools, retrieved passages, and memories that produced it).
+**Multi-chat tabs** for concurrent tasks (memory + files shared across tabs; each tab is aware of what your
+other tabs are working on), markdown-rendered responses, Alice/Bob switcher (private chats, shared files &
+memory), working context ("summarise **this**"), and an **eval harness** that gates every change.
 
 ## Try these
-- Open `interviews/cfo-interview.md`, ask *"summarise this"* → watch the glass-box trace + input-composition bar.
+- Open `interviews/cfo-interview.md`, ask *"summarise this"* → watch it work live, then open the answer's **▸ x-ray**.
 - Ask *"how should I frame the Acme recommendation?"* → see 3 memories injected + prompt caching.
 - ⚖ Compare retrieval: *"why do remote care programs fail to scale?"* → naïve vs reranked vs agentic over the market report.
 - Open a **＋ new tab**, start a different task, then ask a tab *"what am I working on in my other tab?"*

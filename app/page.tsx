@@ -16,9 +16,17 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-type Message = { role: "user" | "assistant"; content: string };
+type TraceEntry = { tool: string; input: Record<string, unknown>; summary: string; result?: string };
+type InjectedLite = { scope: string; tier: string; text: string };
+type MessageMeta = {
+  trace?: TraceEntry[];
+  reasoning?: string;
+  injected?: InjectedLite[];
+  usage?: Usage;
+  composition?: CompPart[];
+};
+type Message = { role: "user" | "assistant"; content: string; meta?: MessageMeta };
 type User = "alice" | "bob";
-type TraceEntry = { tool: string; input: Record<string, unknown>; summary: string };
 type Injected = { id: string; scope: string; type: string; tier: string; tokens: number; text: string };
 type Dropped = { id: string; scope: string; reason: string };
 type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
@@ -33,12 +41,70 @@ type ContextReport = {
   composition?: CompPart[];
 };
 
+// The per-message "X-ray": what informed a given answer (stored on the message).
+function Xray({ meta }: { meta: MessageMeta }) {
+  return (
+    <div className="xray">
+      {meta.reasoning ? (
+        <>
+          <div className="xray-h">💡 reasoning</div>
+          <div className="xray-reason">{meta.reasoning}</div>
+        </>
+      ) : null}
+      {meta.trace && meta.trace.length > 0 && (
+        <>
+          <div className="xray-h">🔧 tools used ({meta.trace.length})</div>
+          {meta.trace.map((t, i) => (
+            <div key={i} className="xray-tool">
+              <div className="xray-tool-sum">{t.summary}</div>
+              {t.result && (
+                <div className="xray-tool-res">
+                  {t.result}
+                  {t.result.length >= 300 ? "…" : ""}
+                </div>
+              )}
+            </div>
+          ))}
+        </>
+      )}
+      {meta.injected && meta.injected.length > 0 && (
+        <>
+          <div className="xray-h">🧠 memory used ({meta.injected.length})</div>
+          {meta.injected.map((m, i) => (
+            <div key={i} className="xray-mem">
+              <div>
+                <span className={`pill ${m.tier}`}>{m.tier === "stable" ? "🔒 always-on" : "↻ per-turn"}</span>{" "}
+                <span className="mem-inj-scope">{m.scope}</span>
+              </div>
+              <div className="mem-inj-text">“{m.text}”</div>
+            </div>
+          ))}
+        </>
+      )}
+      {meta.usage && (
+        <>
+          <div className="xray-h">tokens</div>
+          <div className="ctx-item">
+            input {meta.usage.input} · cache-read {meta.usage.cacheRead} · output {meta.usage.output}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // Fixed palette so each input-composition segment keeps the same colour
 // between the bar and its legend.
 const COMP_COLORS = ["#6366f1", "#8b5cf6", "#0ea5e9", "#f59e0b", "#10b981", "#ef4444", "#ec4899"];
 
 // One chat tab's metadata (mirrors lib/workspace ChatMeta).
 type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessage?: string; openFile?: string | null };
+
+// A project's config (mirrors lib/project ProjectConfig) — a client can have several.
+type ProjectMeta = { id: string; name: string; client: string; sector: string; type: string; status: string };
+
+// A suggested (not-yet-saved) shared memory awaiting approval.
+type Proposal = { id: string; fact: string; scope: string; proposedBy: string; sourceProject: string; created: string };
 
 // A memory as shown in the manager (the whole library, incl. retracted).
 type MemItem = {
@@ -83,6 +149,10 @@ export default function Home() {
   const [activeChat, setActiveChat] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [liveSteps, setLiveSteps] = useState<string[]>([]); // tool steps as they happen
+  const [liveReasoning, setLiveReasoning] = useState(""); // streamed thinking
+  const [liveText, setLiveText] = useState(""); // streamed answer so far
+  const [xray, setXray] = useState<Record<number, boolean>>({}); // which messages are expanded
 
   const [files, setFiles] = useState<string[]>([]);
   const [openFile, setOpenFile] = useState<string | null>(null);
@@ -93,11 +163,13 @@ export default function Home() {
   const [feedbackNote, setFeedbackNote] = useState<string | null>(null);
 
   const [project, setProject] = useState("acme-health");
-  const [projects, setProjects] = useState<string[]>([]);
+  const [projects, setProjects] = useState<ProjectMeta[]>([]);
   const [nominations, setNominations] = useState<Nomination[]>([]);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [signalThreshold, setSignalThreshold] = useState(3);
   const [showQueue, setShowQueue] = useState(false);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [showProposals, setShowProposals] = useState(false);
   const [abstracts, setAbstracts] = useState<Record<string, { text: string; leak?: Leak }>>({});
 
   const [showCompare, setShowCompare] = useState(false);
@@ -143,6 +215,31 @@ export default function Home() {
       .catch(() => setNominations([]));
   }
   useEffect(loadPromotions, []);
+
+  // Load suggested (unsaved) shared memories awaiting approval.
+  function loadProposals() {
+    fetch("/api/memory/proposals")
+      .then((r) => r.json())
+      .then((d) => setProposals(d.proposals ?? []))
+      .catch(() => setProposals([]));
+  }
+  useEffect(loadProposals, []);
+  async function approveProp(id: string) {
+    await fetch("/api/memory/proposals/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    loadProposals();
+  }
+  async function dismissProp(id: string) {
+    await fetch("/api/memory/proposals/dismiss", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    loadProposals();
+  }
 
   // ---- Memory manager: load + edit the whole library ----
   function loadMemories() {
@@ -321,15 +418,16 @@ export default function Home() {
         .then((r) => r.json())
         .then((d) => d.chats ?? [])
         .catch(() => []);
+      if (cancelled) return; // a superseded run (e.g. StrictMode double-mount) must not create a tab
       if (list.length === 0) {
         const created = await fetch("/api/chats", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ user }),
         }).then((r) => r.json());
+        if (cancelled) return;
         list = created.chat ? [created.chat] : [];
       }
-      if (cancelled) return;
       setChats(list);
       if (list[0]) openChatMeta(list[0]);
     })();
@@ -377,6 +475,18 @@ export default function Home() {
     }
   }
 
+  // Turn a tool event into a friendly step line for the live view.
+  function toolStepLabel(name: string, summary: string): string {
+    const icon =
+      name === "read_file" ? "📄" :
+      name === "search_files" || name === "semantic_search" ? "🔍" :
+      name === "list_files" ? "🗂️" :
+      name === "write_file" ? "✍️" :
+      name === "save_memory" ? "🧠" :
+      name === "nominate_for_promotion" || name === "note_signal" ? "⬆️" : "🔧";
+    return `${icon} ${summary}`;
+  }
+
   async function send() {
     const text = input.trim();
     if (!text || loading || !activeChat) return;
@@ -385,6 +495,9 @@ export default function Home() {
     setInput("");
     setLoading(true);
     setFeedbackNote(null);
+    setLiveSteps([]);
+    setLiveReasoning("");
+    setLiveText("");
 
     try {
       const res = await fetch("/api/chat", {
@@ -392,24 +505,61 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user, message: text, project, openFile, recentActions, chatId: activeChat }),
       });
-      const data = await res.json();
-      if (data.history) {
-        setMessages(data.history);
-        setTrace(data.trace ?? []);
-        setContext(data.context ?? null);
-        if (data.files) setFiles(data.files);
-        loadPromotions(); // the agent may have nominated a lesson this turn
-        loadSignals(); // ...or logged a recurring signal
-        refreshChats(); // the tab's title + last-activity may have changed
-        noteAction(`asked "${text.slice(0, 40)}${text.length > 40 ? "…" : ""}"`);
-      } else {
-        setMessages((m) => [...m, { role: "assistant", content: `⚠️ ${data.error}` }]);
+      if (!res.body) throw new Error("no response stream");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let answer = "";
+      let done = false;
+
+      while (!done) {
+        const { value, done: streamDone } = await reader.read();
+        if (streamDone) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? ""; // keep the trailing partial frame
+        for (const frame of frames) {
+          const line = frame.replace(/^data: /, "").trim();
+          if (!line) continue;
+          let ev: Record<string, unknown>;
+          try {
+            ev = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (ev.type === "thinking") {
+            setLiveReasoning((r) => (r + String(ev.text)).slice(-600));
+          } else if (ev.type === "tool") {
+            setLiveSteps((s) => [...s, toolStepLabel(String(ev.name), String(ev.summary))]);
+          } else if (ev.type === "text") {
+            answer += String(ev.text);
+            setLiveText(answer);
+          } else if (ev.type === "done") {
+            setMessages((ev.history as Message[]) ?? []);
+            setTrace((ev.trace as TraceEntry[]) ?? []);
+            setContext((ev.context as ContextReport) ?? null);
+            if (ev.files) setFiles(ev.files as string[]);
+            loadPromotions(); // the agent may have nominated a lesson this turn
+            loadSignals(); // ...or logged a recurring signal
+            loadProposals(); // ...or suggested a shared memory to approve
+            refreshChats(); // the tab's title + last-activity may have changed
+            noteAction(`asked "${text.slice(0, 40)}${text.length > 40 ? "…" : ""}"`);
+            done = true;
+          } else if (ev.type === "error") {
+            setMessages((m) => [...m, { role: "assistant", content: `⚠️ ${String(ev.error)}` }]);
+            done = true;
+          }
+        }
       }
     } catch (err) {
       const detail = err instanceof Error ? err.message : "network error";
       setMessages((m) => [...m, { role: "assistant", content: `⚠️ ${detail}` }]);
     } finally {
       setLoading(false);
+      setLiveSteps([]);
+      setLiveReasoning("");
+      setLiveText("");
     }
   }
 
@@ -455,9 +605,20 @@ export default function Home() {
           <span className="subtitle">context engineering, made visible</span>
         </h1>
         <div className="topbar-right">
-          <select className="project-select" value={project} onChange={(e) => setProject(e.target.value)} title="project">
-            {projects.map((p) => (
-              <option key={p} value={p}>{p}</option>
+          <select className="project-select" value={project} onChange={(e) => setProject(e.target.value)} title="project (grouped by client · ✓ complete, ● in-progress)">
+            {Object.entries(
+              projects.reduce<Record<string, ProjectMeta[]>>((acc, p) => {
+                (acc[p.client] ||= []).push(p);
+                return acc;
+              }, {})
+            ).map(([client, ps]) => (
+              <optgroup key={client} label={client}>
+                {ps.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.status === "complete" ? "✓" : "●"} {p.name} · {p.type}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
           <button className="queue-btn" onClick={() => setShowCompare(true)}>
@@ -465,6 +626,9 @@ export default function Home() {
           </button>
           <button className="queue-btn" onClick={() => { loadPromotions(); loadSignals(); setShowQueue(true); }}>
             ⬆ Promotions{nominations.length ? ` (${nominations.length})` : ""}
+          </button>
+          <button className="queue-btn" onClick={() => { loadProposals(); setShowProposals(true); }}>
+            💡 Suggested{proposals.length ? ` (${proposals.length})` : ""}
           </button>
           <button className="queue-btn" onClick={() => { loadMemories(); setShowMemory(true); }}>
             🧠 Memory
@@ -513,29 +677,31 @@ export default function Home() {
             {openFile && <span className="badge">this → {openFile.split("/").pop()}</span>}
           </div>
           <div className="tabbar">
-            {chats.map((c) => (
-              <div
-                key={c.chatId}
-                className={`tab ${c.chatId === activeChat ? "active" : ""}`}
-                onClick={() => openChatMeta(c)}
-                title={c.title}
-              >
-                <span className="tab-title">{c.title || "New chat"}</span>
-                {chats.length > 1 && (
-                  <button
-                    className="tab-x"
-                    title="close tab"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      closeChat(c);
-                    }}
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-            ))}
-            <button className="tab-new" title="new chat" onClick={newChat}>＋</button>
+            <div className="tabs">
+              {chats.map((c) => (
+                <div
+                  key={c.chatId}
+                  className={`tab ${c.chatId === activeChat ? "active" : ""}`}
+                  onClick={() => openChatMeta(c)}
+                  title={c.title}
+                >
+                  <span className="tab-title">{c.title || "New chat"}</span>
+                  {chats.length > 1 && (
+                    <button
+                      className="tab-x"
+                      title="close tab"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeChat(c);
+                      }}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button className="tab-new" title="start a new chat" onClick={newChat}>＋ New</button>
             <button className="tab-clear" title="clear this chat" onClick={clearActiveChat}>Clear</button>
           </div>
           <div className="chat">
@@ -550,18 +716,58 @@ export default function Home() {
                 <div key={i} className={`msg ${m.role}`}>
                   <div className="role">{m.role === "user" ? user : "agent"}</div>
                   {m.role === "assistant" ? (
-                    <div className="markdown">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
-                    </div>
+                    <>
+                      <div className="markdown">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                      </div>
+                      {m.meta && (
+                        <div className="xray-wrap">
+                          <button className="xray-toggle" onClick={() => setXray((x) => ({ ...x, [i]: !x[i] }))}>
+                            {xray[i] ? "▾ hide x-ray" : "▸ x-ray — what informed this answer"}
+                          </button>
+                          {xray[i] && <Xray meta={m.meta} />}
+                        </div>
+                      )}
+                    </>
                   ) : (
                     m.content
                   )}
                 </div>
               ))}
+              {/* Memory-awareness chips for the latest turn (from its tool trace) */}
+              {!loading &&
+                trace
+                  .filter((t) => t.tool === "save_memory")
+                  .map((t, i) => {
+                    const personal = String(t.summary).includes("remembered");
+                    const fact = String((t.input as { fact?: string })?.fact ?? "");
+                    return (
+                      <div key={`chip-${i}`} className={`mem-chip ${personal ? "saved" : "suggested"}`}>
+                        <span>
+                          {personal ? "🧠 Remembered" : "💡 Suggested for the team"}: “{fact}”
+                        </span>
+                        {!personal && (
+                          <button onClick={() => { loadProposals(); setShowProposals(true); }}>Review</button>
+                        )}
+                      </div>
+                    );
+                  })}
               {loading && (
                 <div className="msg assistant">
                   <div className="role">agent</div>
-                  <span className="hint">thinking &amp; reading files…</span>
+                  <div className="live">
+                    {liveReasoning && <div className="live-think">💭 {liveReasoning}</div>}
+                    {liveSteps.map((s, i) => (
+                      <div key={i} className="live-step">{s}</div>
+                    ))}
+                    {liveText ? (
+                      <div className="markdown">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{liveText}</ReactMarkdown>
+                      </div>
+                    ) : (
+                      !liveReasoning && liveSteps.length === 0 && <span className="hint">thinking…</span>
+                    )}
+                  </div>
                 </div>
               )}
               <div ref={messagesEndRef} />
@@ -825,6 +1031,40 @@ export default function Home() {
                     <button className="reject" onClick={() => doReject(n.id)}>
                       Reject
                     </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Suggested memories (approval inbox) ---- */}
+      {showProposals && (
+        <div className="modal-overlay" onClick={() => setShowProposals(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h2>Suggested memories</h2>
+              <button onClick={() => setShowProposals(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="empty">
+                Shared memories the agent proposed. Nothing is saved to the team’s memory until you approve it —
+                your personal memories save straight away.
+              </div>
+              {proposals.length === 0 && <div className="empty">Nothing pending.</div>}
+              {proposals.map((p) => (
+                <div key={p.id} className="nom">
+                  <div className="nom-target">
+                    save to <b>{p.scope}</b>
+                  </div>
+                  <div className="nom-fact">“{p.fact}”</div>
+                  <div className="nom-meta">
+                    suggested by {p.proposedBy} · from {p.sourceProject}
+                  </div>
+                  <div className="nom-actions">
+                    <button className="promote" onClick={() => approveProp(p.id)}>Approve &amp; save</button>
+                    <button className="reject" onClick={() => dismissProp(p.id)}>Dismiss</button>
                   </div>
                 </div>
               ))}
