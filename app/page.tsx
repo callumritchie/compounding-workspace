@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { SCENARIOS, type Scenario, type ScenarioStep } from "@/lib/scenarios";
 
 type TraceEntry = { tool: string; input: Record<string, unknown>; summary: string; result?: string };
 type InjectedLite = { id: string; scope: string; type: string; tier: string; text: string };
@@ -274,6 +275,10 @@ export default function Home() {
   const [memTypeFilter, setMemTypeFilter] = useState("all");
   const [memSort, setMemSort] = useState<"priority" | "used" | "newest">("priority");
   const [lifecycle, setLifecycle] = useState<{ stale: StaleItem[]; duplicates: DupPair[] }>({ stale: [], duplicates: [] });
+  // Guided scenario demo mode.
+  const [showScenarios, setShowScenarios] = useState(false);
+  const [activeScenario, setActiveScenario] = useState<Scenario | null>(null);
+  const [scenarioStep, setScenarioStep] = useState(0);
 
   // Agent roster (the harness): the list, the tool catalogue, and the modal state.
   const [agents, setAgents] = useState<AgentItem[]>([]);
@@ -415,6 +420,45 @@ export default function Home() {
       body: JSON.stringify({ scope, id }),
     });
     loadLifecycle();
+  }
+
+  // ---- Guided scenarios ----
+  // Apply a step's context switches (actor / project / open file / open Pending).
+  function applyStepContext(step: ScenarioStep) {
+    if (step.asUser && step.asUser !== user) setUser(step.asUser);
+    if (step.goProject && step.goProject !== project) setProject(step.goProject);
+    if (step.open) setTimeout(() => openFileFn(step.open!), 500); // after the project's files load
+    if (step.openPending) {
+      loadMemories();
+      loadProposals();
+      loadPromotions();
+      loadSignals();
+      loadLifecycle();
+      setMemView("pending");
+      setShowMemory(true);
+    }
+  }
+  function goToScenarioStep(s: Scenario, i: number) {
+    const idx = Math.max(0, Math.min(s.steps.length - 1, i));
+    setScenarioStep(idx);
+    applyStepContext(s.steps[idx]);
+  }
+  function launchScenario(s: Scenario) {
+    setShowScenarios(false);
+    setShowMemory(false);
+    setActiveScenario(s);
+    setScenarioStep(0);
+    if (s.setup.asUser) setUser(s.setup.asUser);
+    if (s.setup.goProject) setProject(s.setup.goProject);
+    if (s.setup.open) setTimeout(() => openFileFn(s.setup.open!), 600);
+    applyStepContext(s.steps[0]);
+  }
+  async function resetDemo() {
+    await fetch("/api/demo/reset", { method: "POST" });
+    loadPromotions();
+    loadProposals();
+    loadMemories();
+    setMemNote("Demo baseline restored.");
   }
 
   // ---- Memory manager: load + edit the whole library ----
@@ -676,8 +720,12 @@ export default function Home() {
     return `${icon} ${summary}`;
   }
 
-  async function send() {
-    const text = input.trim();
+  function send() {
+    return sendText(input);
+  }
+
+  async function sendText(raw: string) {
+    const text = raw.trim();
     if (!text || loading || !activeChat) return;
 
     setMessages((m) => [...m, { role: "user", content: text }]);
@@ -809,6 +857,9 @@ export default function Home() {
               </optgroup>
             ))}
           </select>
+          <button className="queue-btn scenarios-btn" onClick={() => setShowScenarios(true)}>
+            ✨ Scenarios
+          </button>
           <button className="queue-btn" onClick={() => { loadAgents(); setShowAgents(true); }}>
             🤖 Agents
           </button>
@@ -1052,6 +1103,60 @@ export default function Home() {
         </div>
       </div>
 
+
+      {/* ---- Guided scenarios: launcher + running guide panel ---- */}
+      {showScenarios && (
+        <div className="modal-overlay" onClick={() => setShowScenarios(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h2>✨ Scenarios · see it in action</h2>
+              <button onClick={() => setShowScenarios(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="empty">
+                Pick a short, guided walk-through. Each one sets the scene (who you are, which project) and
+                narrates what to watch. Run <b>Reset demo</b> anytime to restore the starting point.
+              </div>
+              {SCENARIOS.map((s) => (
+                <div key={s.id} className="scenario-row" onClick={() => launchScenario(s)}>
+                  <div className="scenario-row-title">{s.title}</div>
+                  <div className="scenario-row-blurb">{s.blurb}</div>
+                </div>
+              ))}
+              <button className="clear-chat" onClick={resetDemo}>↺ Reset demo baseline</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeScenario && (() => {
+        const step = activeScenario.steps[scenarioStep];
+        const last = scenarioStep === activeScenario.steps.length - 1;
+        return (
+          <div className="guide">
+            <div className="guide-head">
+              <span className="guide-title">✨ {activeScenario.title}</span>
+              <button className="guide-x" title="end walk-through" onClick={() => setActiveScenario(null)}>×</button>
+            </div>
+            <div className="guide-step">Step {scenarioStep + 1} of {activeScenario.steps.length}</div>
+            <div className="guide-say">{step.say}</div>
+            {step.prompt && (
+              <button className="guide-send" disabled={loading || !activeChat} onClick={() => sendText(step.prompt!)}>
+                ▸ Send: “{step.prompt.length > 60 ? step.prompt.slice(0, 60) + "…" : step.prompt}”
+              </button>
+            )}
+            {step.watch && <div className="guide-watch">👀 {step.watch}</div>}
+            <div className="guide-nav">
+              <button disabled={scenarioStep === 0} onClick={() => goToScenarioStep(activeScenario, scenarioStep - 1)}>← Back</button>
+              {last ? (
+                <button className="primary" onClick={() => setActiveScenario(null)}>Done</button>
+              ) : (
+                <button className="primary" onClick={() => goToScenarioStep(activeScenario, scenarioStep + 1)}>Next →</button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ---- Memory manager (modal) ---- */}
       {showAgents && (
