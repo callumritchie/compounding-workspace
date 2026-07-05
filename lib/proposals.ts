@@ -57,7 +57,7 @@ export async function listProposals(): Promise<Proposal[]> {
   }
 }
 
-async function getProposal(id: string): Promise<Proposal | null> {
+export async function getProposal(id: string): Promise<Proposal | null> {
   try {
     return JSON.parse(await fs.readFile(path.join(DIR, `${path.basename(id)}.json`), "utf8")) as Proposal;
   } catch {

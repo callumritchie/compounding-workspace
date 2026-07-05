@@ -204,6 +204,19 @@ type AgentItem = {
 type StaleItem = { scope: string; id: string; body: string; importance: number; lastActivity: string; days: number };
 type DupRef = { scope: string; id: string; body: string };
 type DupPair = { a: DupRef; b: DupRef; score: number };
+
+// Client mirror of lib/team.ts — used only to gate the UI (the API is the real
+// gate). Project memory: any team member. Broader scopes: a Lead only.
+const CLIENT_ROLES: Record<string, "lead" | "analyst"> = { callum: "lead", bob: "analyst" };
+function roleLabelOf(u: string): string {
+  return CLIENT_ROLES[u] === "lead" ? "Lead" : "Analyst";
+}
+function canApproveScope(u: string, scope: string): boolean {
+  const level = scope.split("/")[0];
+  if (level === "project") return true;
+  if (["stakeholder", "client", "sector", "company"].includes(level)) return CLIENT_ROLES[u] === "lead";
+  return CLIENT_ROLES[u] === "lead";
+}
 type Chunk = { file: string; text: string; score: number };
 type CompareResult = {
   naive: { chunks: Chunk[]; answer: string };
@@ -360,11 +373,12 @@ export default function Home() {
   }
 
   async function approveProp(id: string) {
-    await fetch("/api/memory/proposals/approve", {
+    const d = await fetch("/api/memory/proposals/approve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    });
+      body: JSON.stringify({ id, user }),
+    }).then((r) => r.json());
+    if (d.error) { setMemNote(d.error); return; }
     loadProposals();
     loadMemories(); // the approved memory now exists in the library
   }
@@ -372,7 +386,7 @@ export default function Home() {
     await fetch("/api/memory/proposals/dismiss", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
+      body: JSON.stringify({ id, user }),
     });
     loadProposals();
   }
@@ -473,9 +487,10 @@ export default function Home() {
     const d = await fetch("/api/promotions/promote", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, text }),
+      body: JSON.stringify({ id, text, user }),
     }).then((r) => r.json());
-    if (d.ok) setNominations((ns) => ns.filter((n) => n.id !== id));
+    if (d.error) { setMemNote(d.error); return; }
+    if (d.ok) { setNominations((ns) => ns.filter((n) => n.id !== id)); loadMemories(); }
   }
 
   // Run the retrieval comparison for whatever's in the composer, inline in the thread.
@@ -497,11 +512,12 @@ export default function Home() {
   }
 
   async function doReject(id: string) {
-    await fetch("/api/promotions/reject", {
+    const d = await fetch("/api/promotions/reject", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    });
+      body: JSON.stringify({ id, user }),
+    }).then((r) => r.json());
+    if (d.error) { setMemNote(d.error); return; }
     setNominations((ns) => ns.filter((n) => n.id !== id));
   }
 
@@ -804,8 +820,12 @@ export default function Home() {
           </button>
           <div className="user-switch">
             <span className="subtitle">You are:</span>
-            <button className={`callum ${user === "callum" ? "active" : ""}`} onClick={() => setUser("callum")}>Callum</button>
-            <button className={`bob ${user === "bob" ? "active" : ""}`} onClick={() => setUser("bob")}>Bob</button>
+            <button className={`callum ${user === "callum" ? "active" : ""}`} onClick={() => setUser("callum")}>
+              Callum <span className="role-badge">Lead</span>
+            </button>
+            <button className={`bob ${user === "bob" ? "active" : ""}`} onClick={() => setUser("bob")}>
+              Bob <span className="role-badge">Analyst</span>
+            </button>
           </div>
         </div>
       </div>
@@ -908,13 +928,16 @@ export default function Home() {
                         </span>
                         {!personal && (() => {
                           const prop = proposals.find((p) => p.fact === fact);
-                          return prop ? (
+                          if (!prop) return <span className="chip-done">reviewed ✓</span>;
+                          return (
                             <span className="chip-actions">
-                              <button onClick={() => approveProp(prop.id)}>Accept</button>
+                              {canApproveScope(user, prop.scope) ? (
+                                <button onClick={() => approveProp(prop.id)}>Accept</button>
+                              ) : (
+                                <span className="chip-done">🔒 needs a Lead</span>
+                              )}
                               <button className="ghost" onClick={() => dismissProp(prop.id)}>Decline</button>
                             </span>
-                          ) : (
-                            <span className="chip-done">reviewed ✓</span>
                           );
                         })()}
                       </div>
@@ -1350,8 +1373,14 @@ export default function Home() {
                     <div className="nom-fact">“{p.fact}”</div>
                     <div className="nom-meta">suggested by {p.proposedBy} · from {p.sourceProject}</div>
                     <div className="nom-actions">
-                      <button className="promote" onClick={() => approveProp(p.id)}>Approve &amp; save</button>
-                      <button className="reject" onClick={() => dismissProp(p.id)}>Dismiss</button>
+                      {canApproveScope(user, p.scope) ? (
+                        <button className="promote" onClick={() => approveProp(p.id)}>Approve &amp; save</button>
+                      ) : (
+                        <span className="lock-note">🔒 Only a Lead can approve {p.scope.split("/")[0]}-level memory</span>
+                      )}
+                      {(canApproveScope(user, p.scope) || user === p.proposedBy) && (
+                        <button className="reject" onClick={() => dismissProp(p.id)}>Dismiss</button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1378,10 +1407,16 @@ export default function Home() {
                       </>
                     )}
                     <div className="nom-actions">
-                      <button className="promote" onClick={() => doPromote(n.id)}>
-                        Promote{abstracts[n.id] ? " (abstracted)" : " as-is"}
-                      </button>
-                      <button className="reject" onClick={() => doReject(n.id)}>Reject</button>
+                      {canApproveScope(user, n.targetScope) ? (
+                        <button className="promote" onClick={() => doPromote(n.id)}>
+                          Promote{abstracts[n.id] ? " (abstracted)" : " as-is"}
+                        </button>
+                      ) : (
+                        <span className="lock-note">🔒 Only a Lead can promote to {n.targetScope.split("/")[0]} scope</span>
+                      )}
+                      {(canApproveScope(user, n.targetScope) || user === n.nominatedBy) && (
+                        <button className="reject" onClick={() => doReject(n.id)}>Reject</button>
+                      )}
                     </div>
                   </div>
                 ))}

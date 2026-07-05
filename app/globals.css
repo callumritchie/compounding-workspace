@@ -395,3 +395,6 @@ html, body {
 .dup-side { border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--bg); }
 .dup-side .nom-meta { margin: 4px 0 6px; }
 .panel-header .hdr-project { color: var(--accent); font-weight: 600; }
+/* Role badges + approval lock notes (governance) */
+.role-badge { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.75; margin-left: 3px; }
+.lock-note { font-size: 12px; color: var(--muted); }
