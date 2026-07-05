@@ -175,6 +175,9 @@ type MemItem = {
   importance: number;
   status: string;
   confidential?: boolean;
+  useCount?: number;
+  lastUsed?: string;
+  created?: string;
   body: string;
 };
 
@@ -247,6 +250,12 @@ export default function Home() {
   const [allMemories, setAllMemories] = useState<MemItem[]>([]);
   const [memDraft, setMemDraft] = useState<Record<string, { body: string; importance: number }>>({});
   const [memNote, setMemNote] = useState<string | null>(null);
+  // Library browse controls (find / filter / sort) — for when there are lots of memories.
+  const [memSearch, setMemSearch] = useState("");
+  const [memLevel, setMemLevel] = useState("all");
+  const [memStatusFilter, setMemStatusFilter] = useState("all");
+  const [memTypeFilter, setMemTypeFilter] = useState("all");
+  const [memSort, setMemSort] = useState<"priority" | "used" | "newest">("priority");
 
   // Agent roster (the harness): the list, the tool catalogue, and the modal state.
   const [agents, setAgents] = useState<AgentItem[]>([]);
@@ -1127,6 +1136,40 @@ export default function Home() {
               </div>
               {memNote && <div className="ctx-item">{memNote}</div>}
               {allMemories.length === 0 && <div className="empty">No memories yet.</div>}
+              {allMemories.length > 0 && (
+                <div className="mem-toolbar">
+                  <input
+                    className="mem-search"
+                    placeholder="Search memories…"
+                    value={memSearch}
+                    onChange={(e) => setMemSearch(e.target.value)}
+                  />
+                  <select value={memLevel} onChange={(e) => setMemLevel(e.target.value)} title="scope level">
+                    <option value="all">All levels</option>
+                    <option value="company">Company</option>
+                    <option value="sector">Sector</option>
+                    <option value="client">Client</option>
+                    <option value="stakeholder">Stakeholder</option>
+                    <option value="project">Project</option>
+                    <option value="personal">Personal</option>
+                  </select>
+                  <select value={memStatusFilter} onChange={(e) => setMemStatusFilter(e.target.value)} title="status">
+                    <option value="all">Active + archived</option>
+                    <option value="active">Active only</option>
+                    <option value="archived">Archived only</option>
+                  </select>
+                  <select value={memTypeFilter} onChange={(e) => setMemTypeFilter(e.target.value)} title="type">
+                    <option value="all">All types</option>
+                    <option value="constitution">Constitution</option>
+                    <option value="learned">Learned</option>
+                  </select>
+                  <select value={memSort} onChange={(e) => setMemSort(e.target.value as typeof memSort)} title="sort">
+                    <option value="priority">Sort: priority</option>
+                    <option value="used">Sort: most-used</option>
+                    <option value="newest">Sort: newest</option>
+                  </select>
+                </div>
+              )}
               {(() => {
                 // Group by lattice LEVEL (the scope's first segment), then render
                 // the levels broad → specific with a labelled, divided section each.
@@ -1138,14 +1181,31 @@ export default function Home() {
                   { key: "project", label: "Project", gloss: "this engagement only" },
                   { key: "personal", label: "Personal", gloss: "just this user" },
                 ];
-                const byLevel = allMemories.reduce<Record<string, MemItem[]>>((acc, m) => {
+                // Apply the browse controls, then group + sort within each level.
+                const q = memSearch.trim().toLowerCase();
+                const filtered = allMemories.filter((m) => {
+                  if (memLevel !== "all" && m.scope.split("/")[0] !== memLevel) return false;
+                  if (memStatusFilter === "active" && m.status === "retracted") return false;
+                  if (memStatusFilter === "archived" && m.status !== "retracted") return false;
+                  if (memTypeFilter !== "all" && m.type !== memTypeFilter) return false;
+                  if (q && !(m.body.toLowerCase().includes(q) || m.scope.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)))
+                    return false;
+                  return true;
+                });
+                const rank = (m: MemItem) =>
+                  memSort === "used" ? (m.useCount ?? 0) : memSort === "newest" ? (m.created ?? m.lastUsed ?? "") : m.importance;
+                const byLevel = filtered.reduce<Record<string, MemItem[]>>((acc, m) => {
                   (acc[m.scope.split("/")[0]] ||= []).push(m);
                   return acc;
                 }, {});
+                for (const k of Object.keys(byLevel)) {
+                  byLevel[k].sort((a, b) => (rank(a) > rank(b) ? -1 : rank(a) < rank(b) ? 1 : 0));
+                }
                 const known = LEVELS.map((l) => l.key);
                 const extras = Object.keys(byLevel)
                   .filter((k) => !known.includes(k))
                   .map((k) => ({ key: k, label: k, gloss: "" }));
+                if (filtered.length === 0) return <div className="empty">No memories match.</div>;
                 return [...LEVELS, ...extras]
                   .filter((lvl) => byLevel[lvl.key]?.length)
                   .map((lvl) => (
@@ -1167,6 +1227,7 @@ export default function Home() {
                             <span className={`pill ${isConstitution ? "stable" : "ranked"}`}>{m.type}</span>
                             {m.confidential && <span className="pill conf">confidential</span>}
                             {retracted && <span className="pill ret">archived</span>}
+                            {m.useCount ? <span className="mem-uses" title="turns it's been injected into">used {m.useCount}×</span> : null}
                             <span className="mem-id">{m.id}</span>
                           </div>
                           <textarea
