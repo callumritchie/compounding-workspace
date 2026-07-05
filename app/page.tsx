@@ -200,6 +200,10 @@ type AgentItem = {
   model: string;
   tools: string[];
 };
+// Library housekeeping suggestions (auto-lifecycle).
+type StaleItem = { scope: string; id: string; body: string; importance: number; lastActivity: string; days: number };
+type DupRef = { scope: string; id: string; body: string };
+type DupPair = { a: DupRef; b: DupRef; score: number };
 type Chunk = { file: string; text: string; score: number };
 type CompareResult = {
   naive: { chunks: Chunk[]; answer: string };
@@ -256,6 +260,7 @@ export default function Home() {
   const [memStatusFilter, setMemStatusFilter] = useState("all");
   const [memTypeFilter, setMemTypeFilter] = useState("all");
   const [memSort, setMemSort] = useState<"priority" | "used" | "newest">("priority");
+  const [lifecycle, setLifecycle] = useState<{ stale: StaleItem[]; duplicates: DupPair[] }>({ stale: [], duplicates: [] });
 
   // Agent roster (the harness): the list, the tool catalogue, and the modal state.
   const [agents, setAgents] = useState<AgentItem[]>([]);
@@ -370,6 +375,32 @@ export default function Home() {
       body: JSON.stringify({ id }),
     });
     loadProposals();
+  }
+
+  // Housekeeping suggestions (stale + near-duplicate memories). Embedding-based,
+  // so computed lazily when the Memory manager opens.
+  function loadLifecycle() {
+    fetch("/api/memory/lifecycle")
+      .then((r) => r.json())
+      .then((d) => setLifecycle({ stale: d.stale ?? [], duplicates: d.duplicates ?? [] }))
+      .catch(() => setLifecycle({ stale: [], duplicates: [] }));
+  }
+  async function archiveByRef(scope: string, id: string) {
+    await fetch("/api/memory/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope, id, status: "retracted" }),
+    });
+    loadMemories();
+    loadLifecycle();
+  }
+  async function keepByRef(scope: string, id: string) {
+    await fetch("/api/memory/touch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope, id }),
+    });
+    loadLifecycle();
   }
 
   // ---- Memory manager: load + edit the whole library ----
@@ -765,7 +796,7 @@ export default function Home() {
           </button>
           <button
             className="queue-btn"
-            onClick={() => { loadMemories(); loadProposals(); loadPromotions(); loadSignals(); setShowMemory(true); }}
+            onClick={() => { loadMemories(); loadProposals(); loadPromotions(); loadSignals(); loadLifecycle(); setShowMemory(true); }}
           >
             🧠 Memory manager{proposals.length + nominations.length ? ` (${proposals.length + nominations.length})` : ""}
           </button>
@@ -1304,7 +1335,7 @@ export default function Home() {
                   scope, and implicit signals building toward a nomination. Approving a suggestion here is the
                   same as the Accept button on a chat suggestion.
                 </div>
-                {proposals.length + nominations.length + signals.length === 0 && (
+                {proposals.length + nominations.length + signals.length + lifecycle.stale.length + lifecycle.duplicates.length === 0 && (
                   <div className="empty">Nothing pending right now.</div>
                 )}
 
@@ -1369,6 +1400,47 @@ export default function Home() {
                       </div>
                     ))}
                   </div>
+                )}
+
+                {lifecycle.stale.length > 0 && (
+                  <>
+                    <div className="ctx-h">🧹 Stale — suggest archiving ({lifecycle.stale.length})</div>
+                    <div className="ctx-cap">
+                      Low-priority learned memories not used or reinforced in over a month. Archiving keeps the
+                      record but stops the agent using it; Keep snoozes the reminder.
+                    </div>
+                    {lifecycle.stale.map((s) => (
+                      <div key={`stale-${s.scope}:${s.id}`} className="nom">
+                        <div className="nom-target"><b>{s.scope}</b> · last active {s.lastActivity} ({s.days}d ago)</div>
+                        <div className="nom-fact">“{s.body}”</div>
+                        <div className="nom-actions">
+                          <button className="reject" onClick={() => archiveByRef(s.scope, s.id)}>Archive</button>
+                          <button className="mini" onClick={() => keepByRef(s.scope, s.id)}>Keep</button>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {lifecycle.duplicates.length > 0 && (
+                  <>
+                    <div className="ctx-h">👯 Possible duplicates ({lifecycle.duplicates.length})</div>
+                    <div className="ctx-cap">Near-identical learned memories — archive one to consolidate.</div>
+                    {lifecycle.duplicates.map((p, i) => (
+                      <div key={`dup-${i}`} className="nom">
+                        <div className="nom-target">similarity {Math.round(p.score * 100)}%</div>
+                        <div className="dup-pair">
+                          {[p.a, p.b].map((side) => (
+                            <div key={`${side.scope}:${side.id}`} className="dup-side">
+                              <div className="nom-fact">“{side.body}”</div>
+                              <div className="nom-meta">{side.scope}</div>
+                              <button className="reject" onClick={() => archiveByRef(side.scope, side.id)}>Archive this</button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </>
                 )}
               </>
               )}

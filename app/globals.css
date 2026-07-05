@@ -389,3 +389,8 @@ html, body {
 .mem-toolbar .mem-search { flex: 1 1 180px; border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font: inherit; background: var(--bg); }
 .mem-toolbar select { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 12px; background: var(--bg); }
 .mem-meta .mem-uses { font-size: 11px; color: var(--muted); }
+/* Duplicate-pair side-by-side in the Pending housekeeping section */
+.dup-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+@media (max-width: 620px) { .dup-pair { grid-template-columns: 1fr; } }
+.dup-side { border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--bg); }
+.dup-side .nom-meta { margin: 4px 0 6px; }
