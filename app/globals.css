@@ -191,6 +191,13 @@ html, body {
 .tabbar .tab-clear { font-size: 12px; color: var(--muted); }
 .tabbar .tab-new:hover, .tabbar .tab-clear:hover { background: var(--bg); }
 
+/* Memory-awareness chips (in chat) */
+.mem-chip { align-self: flex-start; max-width: 80%; font-size: 12px; padding: 5px 10px; border-radius: 8px; margin: 1px 0; display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.mem-chip.saved { background: var(--accent-soft); border: 1px solid var(--border); }
+.mem-chip.suggested { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+.mem-chip button { border: 1px solid currentColor; background: transparent; color: inherit; border-radius: 5px; font-size: 11px; padding: 1px 7px; cursor: pointer; }
+.mem-chip button:hover { opacity: 0.75; }
+
 /* Memory manager (modal) */
 .mem-group { margin-bottom: 14px; }
 .mem-card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--bg); }

@@ -43,6 +43,9 @@ type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessag
 // A project's config (mirrors lib/project ProjectConfig) — a client can have several.
 type ProjectMeta = { id: string; name: string; client: string; sector: string; type: string; status: string };
 
+// A suggested (not-yet-saved) shared memory awaiting approval.
+type Proposal = { id: string; fact: string; scope: string; proposedBy: string; sourceProject: string; created: string };
+
 // A memory as shown in the manager (the whole library, incl. retracted).
 type MemItem = {
   id: string;
@@ -101,6 +104,8 @@ export default function Home() {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [signalThreshold, setSignalThreshold] = useState(3);
   const [showQueue, setShowQueue] = useState(false);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [showProposals, setShowProposals] = useState(false);
   const [abstracts, setAbstracts] = useState<Record<string, { text: string; leak?: Leak }>>({});
 
   const [showCompare, setShowCompare] = useState(false);
@@ -146,6 +151,31 @@ export default function Home() {
       .catch(() => setNominations([]));
   }
   useEffect(loadPromotions, []);
+
+  // Load suggested (unsaved) shared memories awaiting approval.
+  function loadProposals() {
+    fetch("/api/memory/proposals")
+      .then((r) => r.json())
+      .then((d) => setProposals(d.proposals ?? []))
+      .catch(() => setProposals([]));
+  }
+  useEffect(loadProposals, []);
+  async function approveProp(id: string) {
+    await fetch("/api/memory/proposals/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    loadProposals();
+  }
+  async function dismissProp(id: string) {
+    await fetch("/api/memory/proposals/dismiss", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    loadProposals();
+  }
 
   // ---- Memory manager: load + edit the whole library ----
   function loadMemories() {
@@ -404,6 +434,7 @@ export default function Home() {
         if (data.files) setFiles(data.files);
         loadPromotions(); // the agent may have nominated a lesson this turn
         loadSignals(); // ...or logged a recurring signal
+        loadProposals(); // ...or suggested a shared memory to approve
         refreshChats(); // the tab's title + last-activity may have changed
         noteAction(`asked "${text.slice(0, 40)}${text.length > 40 ? "…" : ""}"`);
       } else {
@@ -480,6 +511,9 @@ export default function Home() {
           </button>
           <button className="queue-btn" onClick={() => { loadPromotions(); loadSignals(); setShowQueue(true); }}>
             ⬆ Promotions{nominations.length ? ` (${nominations.length})` : ""}
+          </button>
+          <button className="queue-btn" onClick={() => { loadProposals(); setShowProposals(true); }}>
+            💡 Suggested{proposals.length ? ` (${proposals.length})` : ""}
           </button>
           <button className="queue-btn" onClick={() => { loadMemories(); setShowMemory(true); }}>
             🧠 Memory
@@ -575,6 +609,24 @@ export default function Home() {
                   )}
                 </div>
               ))}
+              {/* Memory-awareness chips for the latest turn (from its tool trace) */}
+              {!loading &&
+                trace
+                  .filter((t) => t.tool === "save_memory")
+                  .map((t, i) => {
+                    const personal = String(t.summary).includes("remembered");
+                    const fact = String((t.input as { fact?: string })?.fact ?? "");
+                    return (
+                      <div key={`chip-${i}`} className={`mem-chip ${personal ? "saved" : "suggested"}`}>
+                        <span>
+                          {personal ? "🧠 Remembered" : "💡 Suggested for the team"}: “{fact}”
+                        </span>
+                        {!personal && (
+                          <button onClick={() => { loadProposals(); setShowProposals(true); }}>Review</button>
+                        )}
+                      </div>
+                    );
+                  })}
               {loading && (
                 <div className="msg assistant">
                   <div className="role">agent</div>
@@ -842,6 +894,40 @@ export default function Home() {
                     <button className="reject" onClick={() => doReject(n.id)}>
                       Reject
                     </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Suggested memories (approval inbox) ---- */}
+      {showProposals && (
+        <div className="modal-overlay" onClick={() => setShowProposals(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h2>Suggested memories</h2>
+              <button onClick={() => setShowProposals(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="empty">
+                Shared memories the agent proposed. Nothing is saved to the team’s memory until you approve it —
+                your personal memories save straight away.
+              </div>
+              {proposals.length === 0 && <div className="empty">Nothing pending.</div>}
+              {proposals.map((p) => (
+                <div key={p.id} className="nom">
+                  <div className="nom-target">
+                    save to <b>{p.scope}</b>
+                  </div>
+                  <div className="nom-fact">“{p.fact}”</div>
+                  <div className="nom-meta">
+                    suggested by {p.proposedBy} · from {p.sourceProject}
+                  </div>
+                  <div className="nom-actions">
+                    <button className="promote" onClick={() => approveProp(p.id)}>Approve &amp; save</button>
+                    <button className="reject" onClick={() => dismissProp(p.id)}>Dismiss</button>
                   </div>
                 </div>
               ))}

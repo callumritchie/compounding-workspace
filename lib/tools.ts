@@ -11,6 +11,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { listFiles, readFile, searchFiles, writeFile } from "./corpus";
 import { writeMemory } from "./memory";
 import { addNomination } from "./promotion";
+import { addProposal } from "./proposals";
 import { noteSignal } from "./signals";
 import { search } from "./vectors";
 import { getProjectConfig } from "./project";
@@ -167,15 +168,26 @@ export async function executeTool(
       }
       case "save_memory": {
         const fact = String(input.fact ?? "");
-        const scope = input.scope === "personal" ? `personal/${user}` : `project/${projectId}`;
-        await writeMemory({
-          scope,
-          type: "learned",
-          body: fact,
-          importance: 0.2, // born low — must earn trust before it ranks highly
-          provenance: { origin_user: user, origin_project: projectId, created: new Date().toISOString().slice(0, 10) },
-        });
-        return { result: `Saved to memory (${scope}).`, summary: `remembered → ${scope}` };
+        if (input.scope === "personal") {
+          // Personal memory: only this user sees it → save immediately.
+          const scope = `personal/${user}`;
+          await writeMemory({
+            scope,
+            type: "learned",
+            body: fact,
+            importance: 0.2, // born low — must earn trust before it ranks highly
+            provenance: { origin_user: user, origin_project: projectId, created: new Date().toISOString().slice(0, 10) },
+          });
+          return { result: `Saved to your personal memory.`, summary: `remembered → ${scope}` };
+        }
+        // Project/shared memory changes the TEAM's brain → suggest it for the
+        // user's approval instead of saving silently.
+        const scope = `project/${projectId}`;
+        await addProposal({ fact, scope, proposedBy: user, sourceProject: projectId });
+        return {
+          result: `Suggested as a shared project memory — it will be saved only if the user approves it.`,
+          summary: `suggested shared memory → ${scope} (awaiting approval)`,
+        };
       }
       case "nominate_for_promotion": {
         const fact = String(input.fact ?? "");
