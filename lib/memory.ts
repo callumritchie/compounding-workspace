@@ -11,7 +11,7 @@
 
      scope examples:  company/policy   company/lessons
                       project/acme-health
-                      personal/alice   personal/bob
+                      personal/callum   personal/bob
 
    Two TYPES cut across every scope:
      • constitution — authored, authoritative, doesn't decay (policies, prefs)

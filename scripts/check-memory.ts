@@ -4,7 +4,7 @@
 import { getMemoriesForContext } from "../lib/memory";
 
 async function main() {
-  for (const user of ["alice", "bob"]) {
+  for (const user of ["callum", "bob"]) {
     const mems = await getMemoriesForContext(user, "acme-health");
     console.log(`\n=== ${user} @ acme-health → ${mems.length} in-scope memories ===`);
     for (const m of mems) {

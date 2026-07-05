@@ -1,4 +1,4 @@
-/* M1 proof: a lesson on Alice's project compounds to Bob's DIFFERENT project.
+/* M1 proof: a lesson on Callum's project compounds to Bob's DIFFERENT project.
    Run: env -u ANTHROPIC_API_KEY npx tsx scripts/check-m1.ts */
 export {}; // treat this file as a module (isolates its local `main`)
 
@@ -13,9 +13,9 @@ async function main() {
   const { buildWorkingContext } = await import("../lib/context");
   const { listNominations, promoteNomination, leakCheck } = await import("../lib/promotion");
 
-  // 1. Alice, on acme-health, nominates a lesson to the sector.
+  // 1. Callum, on acme-health, nominates a lesson to the sector.
   const project = "acme-health";
-  const user = "alice";
+  const user = "callum";
   const msg =
     "We've learned the CFO (economic buyer) won't approve any recommendation without a downside/sensitivity " +
     "case — true of healthcare finance sponsors generally. Nominate this lesson for promotion to the sector.";
@@ -49,7 +49,7 @@ async function main() {
   const found = bobMems.some((m) => m.body === abstracted);
   console.log(`\n5. Bob @ beacon-health now sees ${bobMems.length} memories:`);
   bobMems.forEach((m) => console.log("   [" + m.scope + "] " + m.body.slice(0, 58)));
-  console.log(found ? "\n✅ M1 PROVEN: Alice's lesson reached Bob on a different project." : "\n❌ M1: promoted lesson not found for Bob.");
+  console.log(found ? "\n✅ M1 PROVEN: Callum's lesson reached Bob on a different project." : "\n❌ M1: promoted lesson not found for Bob.");
 }
 
 main();

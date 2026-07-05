@@ -1,4 +1,4 @@
-/* GET  /api/chats?user=alice   → that user's tab list
+/* GET  /api/chats?user=callum   → that user's tab list
    POST /api/chats { user }      → create a new tab, returns { chat } */
 
 import { listChats, createChat, isUser } from "@/lib/workspace";

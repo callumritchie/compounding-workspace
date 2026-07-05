@@ -46,7 +46,7 @@ inspectable in the glass box.
 Plus: **live streaming** — watch the agent read files, search, and write its answer in real time — and a
 per-message **▸ x-ray** (click any answer to see the tools, retrieved passages, and memories that produced it).
 **Multi-chat tabs** for concurrent tasks (memory + files shared across tabs; each tab is aware of what your
-other tabs are working on), markdown-rendered responses, Alice/Bob switcher (private chats, shared files &
+other tabs are working on), markdown-rendered responses, Callum/Bob switcher (private chats, shared files &
 memory), working context ("summarise **this**"), and an **eval harness** that gates every change.
 
 ## Try these

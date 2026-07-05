@@ -13,7 +13,7 @@
   --muted: #77776f;
   --accent: #b4562c;      /* terracotta */
   --accent-soft: #f3e6df;
-  --user-a: #2c6eb4;      /* Alice */
+  --user-a: #2c6eb4;      /* Callum */
   --user-b: #2c8f5a;      /* Bob */
 }
 
@@ -157,7 +157,7 @@ html, body {
   color: #fff;
   border-color: transparent;
 }
-.user-switch button.active.alice { background: var(--user-a); }
+.user-switch button.active.callum { background: var(--user-a); }
 .user-switch button.active.bob   { background: var(--user-b); }
 
 /* ---- Chat ---- */

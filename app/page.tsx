@@ -26,7 +26,7 @@ type MessageMeta = {
   composition?: CompPart[];
 };
 type Message = { role: "user" | "assistant"; content: string; meta?: MessageMeta };
-type User = "alice" | "bob";
+type User = "callum" | "bob";
 type Injected = { id: string; scope: string; type: string; tier: string; tokens: number; text: string };
 type Dropped = { id: string; scope: string; reason: string };
 type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
@@ -204,7 +204,7 @@ type Signal = {
 };
 
 export default function Home() {
-  const [user, setUser] = useState<User>("alice");
+  const [user, setUser] = useState<User>("callum");
   const [messages, setMessages] = useState<Message[]>([]);
   const [chats, setChats] = useState<ChatMeta[]>([]);
   const [activeChat, setActiveChat] = useState<string | null>(null);
@@ -698,7 +698,7 @@ export default function Home() {
           </button>
           <div className="user-switch">
             <span className="subtitle">You are:</span>
-            <button className={`alice ${user === "alice" ? "active" : ""}`} onClick={() => setUser("alice")}>Alice</button>
+            <button className={`callum ${user === "callum" ? "active" : ""}`} onClick={() => setUser("callum")}>Callum</button>
             <button className={`bob ${user === "bob" ? "active" : ""}`} onClick={() => setUser("bob")}>Bob</button>
           </div>
         </div>
