@@ -2,8 +2,16 @@
    workspace.ts — the tiny "storage layer".
 
    Everything the app remembers lives as plain files under ./workspace, so you
-   can open them in a text editor and SEE the state. This module only knows how
-   to read/write per-user chat history for now; memory + corpus come later.
+   can open them in a text editor and SEE the state.
+
+   Chat history is PRIVATE per user, and now split into multiple TABS so you can
+   run concurrent tasks. Each user has:
+     workspace/users/<user>/chats/<chatId>.json   — one chat's messages
+     workspace/users/<user>/chats/index.json      — the tab list (metadata)
+
+   Memory + files stay SHARED, so a memory saved in one tab is available in all
+   of them, and each tab can see what the others are working on (the index's
+   title + last message feed the "other open tabs" awareness block).
 --------------------------------------------------------------------------- */
 
 import { promises as fs } from "fs";
@@ -12,37 +20,100 @@ import path from "path";
 // A single chat turn. Kept intentionally minimal.
 export type Message = { role: "user" | "assistant"; content: string };
 
+// One tab's metadata (the messages themselves live in <chatId>.json).
+export type ChatMeta = {
+  chatId: string;
+  title: string;
+  updated: string;
+  lastUserMessage?: string;
+  openFile?: string | null;
+};
+
 // The two simulated users. Switching between them is how we demo "shared vs
-// private" later: chat history is PRIVATE, files + memory will be SHARED.
+// private": chat history is PRIVATE, files + memory are SHARED.
 export const USERS = ["alice", "bob"] as const;
 export type User = (typeof USERS)[number];
 
 // Root of all on-disk state.
 const WORKSPACE = path.join(process.cwd(), "workspace");
 
-function historyPath(user: User): string {
-  return path.join(WORKSPACE, "users", user, "chat-history.json");
+function chatsDir(user: User): string {
+  return path.join(WORKSPACE, "users", user, "chats");
+}
+function indexPath(user: User): string {
+  return path.join(chatsDir(user), "index.json");
+}
+function chatPath(user: User, chatId: string): string {
+  // basename() guards against a chatId containing path separators.
+  return path.join(chatsDir(user), `${path.basename(chatId)}.json`);
 }
 
-// Make sure a user's folder exists before we write to it.
-async function ensureUserDir(user: User): Promise<void> {
-  await fs.mkdir(path.join(WORKSPACE, "users", user), { recursive: true });
-}
-
-// Load a user's private chat history (empty list if they've never chatted).
-export async function getHistory(user: User): Promise<Message[]> {
+async function readIndex(user: User): Promise<ChatMeta[]> {
   try {
-    const raw = await fs.readFile(historyPath(user), "utf8");
-    return JSON.parse(raw) as Message[];
+    return JSON.parse(await fs.readFile(indexPath(user), "utf8")) as ChatMeta[];
+  } catch {
+    return [];
+  }
+}
+async function writeIndex(user: User, list: ChatMeta[]): Promise<void> {
+  await fs.mkdir(chatsDir(user), { recursive: true });
+  await fs.writeFile(indexPath(user), JSON.stringify(list, null, 2), "utf8");
+}
+
+// The tab list (empty if this user has never chatted).
+export async function listChats(user: User): Promise<ChatMeta[]> {
+  return readIndex(user);
+}
+
+// Start a new tab.
+export async function createChat(user: User, title = "New chat"): Promise<ChatMeta> {
+  const chatId = `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const meta: ChatMeta = { chatId, title, updated: new Date().toISOString() };
+  const list = await readIndex(user);
+  list.push(meta);
+  await writeIndex(user, list);
+  await fs.writeFile(chatPath(user, chatId), "[]", "utf8");
+  return meta;
+}
+
+// One tab's messages ([] if none yet).
+export async function getChatHistory(user: User, chatId: string): Promise<Message[]> {
+  try {
+    return JSON.parse(await fs.readFile(chatPath(user, chatId), "utf8")) as Message[];
   } catch {
     return [];
   }
 }
 
-// Save a user's private chat history back to disk.
-export async function saveHistory(user: User, messages: Message[]): Promise<void> {
-  await ensureUserDir(user);
-  await fs.writeFile(historyPath(user), JSON.stringify(messages, null, 2), "utf8");
+// Save one tab's messages back to disk.
+export async function saveChatHistory(user: User, chatId: string, messages: Message[]): Promise<void> {
+  await fs.mkdir(chatsDir(user), { recursive: true });
+  await fs.writeFile(chatPath(user, chatId), JSON.stringify(messages, null, 2), "utf8");
+}
+
+// Patch a tab's metadata (title, last message, open file, updated time).
+export async function updateChatMeta(user: User, chatId: string, patch: Partial<ChatMeta>): Promise<void> {
+  const list = await readIndex(user);
+  const i = list.findIndex((c) => c.chatId === chatId);
+  if (i === -1) return;
+  list[i] = { ...list[i], ...patch };
+  await writeIndex(user, list);
+}
+
+// Empty a tab's messages but keep the tab.
+export async function clearChat(user: User, chatId: string): Promise<void> {
+  await saveChatHistory(user, chatId, []);
+}
+
+// Remove a tab entirely.
+export async function deleteChat(user: User, chatId: string): Promise<void> {
+  const list = (await readIndex(user)).filter((c) => c.chatId !== chatId);
+  await writeIndex(user, list);
+  try {
+    await fs.unlink(chatPath(user, chatId));
+  } catch {
+    /* already gone */
+  }
 }
 
 // Guard: reject anything that isn't one of our known users.

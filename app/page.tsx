@@ -37,6 +37,9 @@ type ContextReport = {
 // between the bar and its legend.
 const COMP_COLORS = ["#6366f1", "#8b5cf6", "#0ea5e9", "#f59e0b", "#10b981", "#ef4444", "#ec4899"];
 
+// One chat tab's metadata (mirrors lib/workspace ChatMeta).
+type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessage?: string; openFile?: string | null };
+
 // A memory as shown in the manager (the whole library, incl. retracted).
 type MemItem = {
   id: string;
@@ -76,6 +79,8 @@ type Signal = {
 export default function Home() {
   const [user, setUser] = useState<User>("alice");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [chats, setChats] = useState<ChatMeta[]>([]);
+  const [activeChat, setActiveChat] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -239,15 +244,99 @@ export default function Home() {
     setNominations((ns) => ns.filter((n) => n.id !== id));
   }
 
-  // Load THIS user's private history when we switch user.
-  useEffect(() => {
-    fetch(`/api/history?user=${user}`)
-      .then((r) => r.json())
-      .then((d) => setMessages(d.history ?? []))
-      .catch(() => setMessages([]));
+  // ---- Chat tabs (concurrent tasks; memory + files stay shared) ----
+  // Open a tab: load its messages, reset the per-tab session view.
+  async function openChatMeta(meta: ChatMeta) {
+    setActiveChat(meta.chatId);
     setTrace([]);
     setContext(null);
     setFeedbackNote(null);
+    setRecentActions([]);
+    setOpenFile(null);
+    setOpenContent("");
+    const d = await fetch(`/api/history?user=${user}&chat=${meta.chatId}`).then((r) => r.json()).catch(() => ({}));
+    setMessages(d.history ?? []);
+  }
+
+  async function refreshChats(): Promise<ChatMeta[]> {
+    const list: ChatMeta[] = await fetch(`/api/chats?user=${user}`)
+      .then((r) => r.json())
+      .then((d) => d.chats ?? [])
+      .catch(() => []);
+    setChats(list);
+    return list;
+  }
+
+  async function newChat() {
+    const created = await fetch("/api/chats", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user }),
+    }).then((r) => r.json());
+    if (created.chat) {
+      await refreshChats();
+      openChatMeta(created.chat);
+    }
+  }
+
+  async function closeChat(meta: ChatMeta) {
+    await fetch("/api/chats/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user, chatId: meta.chatId }),
+    });
+    let list = await refreshChats();
+    if (list.length === 0) {
+      const created = await fetch("/api/chats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user }),
+      }).then((r) => r.json());
+      list = await refreshChats();
+      if (created.chat) openChatMeta(created.chat);
+      return;
+    }
+    if (activeChat === meta.chatId) openChatMeta(list[0]);
+  }
+
+  async function clearActiveChat() {
+    if (!activeChat) return;
+    await fetch("/api/chats/clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user, chatId: activeChat }),
+    });
+    setMessages([]);
+    setTrace([]);
+    setContext(null);
+    setFeedbackNote(null);
+    refreshChats();
+  }
+
+  // On user switch: load their tabs (create one if none), open the first.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let list: ChatMeta[] = await fetch(`/api/chats?user=${user}`)
+        .then((r) => r.json())
+        .then((d) => d.chats ?? [])
+        .catch(() => []);
+      if (list.length === 0) {
+        const created = await fetch("/api/chats", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user }),
+        }).then((r) => r.json());
+        list = created.chat ? [created.chat] : [];
+      }
+      if (cancelled) return;
+      setChats(list);
+      if (list[0]) openChatMeta(list[0]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   useEffect(() => {
@@ -290,7 +379,7 @@ export default function Home() {
 
   async function send() {
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || loading || !activeChat) return;
 
     setMessages((m) => [...m, { role: "user", content: text }]);
     setInput("");
@@ -301,7 +390,7 @@ export default function Home() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user, message: text, project, openFile, recentActions }),
+        body: JSON.stringify({ user, message: text, project, openFile, recentActions, chatId: activeChat }),
       });
       const data = await res.json();
       if (data.history) {
@@ -311,6 +400,7 @@ export default function Home() {
         if (data.files) setFiles(data.files);
         loadPromotions(); // the agent may have nominated a lesson this turn
         loadSignals(); // ...or logged a recurring signal
+        refreshChats(); // the tab's title + last-activity may have changed
         noteAction(`asked "${text.slice(0, 40)}${text.length > 40 ? "…" : ""}"`);
       } else {
         setMessages((m) => [...m, { role: "assistant", content: `⚠️ ${data.error}` }]);
@@ -421,6 +511,32 @@ export default function Home() {
           <div className="panel-header">
             Chat · private to {user}
             {openFile && <span className="badge">this → {openFile.split("/").pop()}</span>}
+          </div>
+          <div className="tabbar">
+            {chats.map((c) => (
+              <div
+                key={c.chatId}
+                className={`tab ${c.chatId === activeChat ? "active" : ""}`}
+                onClick={() => openChatMeta(c)}
+                title={c.title}
+              >
+                <span className="tab-title">{c.title || "New chat"}</span>
+                {chats.length > 1 && (
+                  <button
+                    className="tab-x"
+                    title="close tab"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      closeChat(c);
+                    }}
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            ))}
+            <button className="tab-new" title="new chat" onClick={newChat}>＋</button>
+            <button className="tab-clear" title="clear this chat" onClick={clearActiveChat}>Clear</button>
           </div>
           <div className="chat">
             <div className="messages">

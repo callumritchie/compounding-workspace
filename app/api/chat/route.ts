@@ -9,7 +9,14 @@
         (the list may have changed if the agent wrote a file)
 */
 
-import { getHistory, saveHistory, isUser, type Message } from "@/lib/workspace";
+import {
+  getChatHistory,
+  saveChatHistory,
+  listChats,
+  updateChatMeta,
+  isUser,
+  type Message,
+} from "@/lib/workspace";
 import { respond, SYSTEM_BASE } from "@/lib/agent";
 import { buildWorkingContext } from "@/lib/context";
 import { assembleContext, estimateTokens } from "@/lib/assemble";
@@ -27,13 +34,22 @@ export async function POST(req: Request) {
     ? body.recentActions.filter((x: unknown): x is string => typeof x === "string")
     : [];
 
+  const chatId: string | null = typeof body?.chatId === "string" ? body.chatId : null;
+
   if (!isUser(user)) return Response.json({ error: "unknown user" }, { status: 400 });
   if (!message) return Response.json({ error: "empty message" }, { status: 400 });
+  if (!chatId) return Response.json({ error: "missing chatId" }, { status: 400 });
 
-  const history = await getHistory(user);
+  const history = await getChatHistory(user, chatId);
   history.push({ role: "user", content: message });
 
-  const workingContext = buildWorkingContext({ projectId: project, openFile, recentActions });
+  // What this user's OTHER tabs are working on — compact cross-tab awareness.
+  const allChats = await listChats(user);
+  const otherTabs = allChats
+    .filter((c) => c.chatId !== chatId)
+    .map((c) => ({ title: c.title, openFile: c.openFile, lastActivity: c.lastUserMessage }));
+
+  const workingContext = buildWorkingContext({ projectId: project, openFile, recentActions, otherTabs });
 
   // Assemble memory (labelled, split into cache-stable + query-ranked tiers,
   // budgeted) for THIS user + project — see lib/assemble.ts.
@@ -72,7 +88,19 @@ export async function POST(req: Request) {
 
   const assistantMessage: Message = { role: "assistant", content: text };
   history.push(assistantMessage);
-  await saveHistory(user, history);
+  await saveChatHistory(user, chatId, history);
+
+  // Update this tab's metadata: auto-title from the first message, and record
+  // the last message + open file so other tabs can see what it's working on.
+  const currentMeta = allChats.find((c) => c.chatId === chatId);
+  const hasTitle = currentMeta?.title && currentMeta.title !== "New chat";
+  const title = hasTitle ? currentMeta!.title : message.slice(0, 40);
+  await updateChatMeta(user, chatId, {
+    title,
+    lastUserMessage: message,
+    openFile,
+    updated: new Date().toISOString(),
+  });
 
   const files = await listFiles(project);
   const context = { ...assembled.report, usage, composition };

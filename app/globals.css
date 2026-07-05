@@ -177,6 +177,17 @@ html, body {
 .toklegend .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; flex: none; }
 .tokcap { font-size: 11px; color: var(--muted); }
 
+/* Chat tabs */
+.tabbar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--border); overflow-x: auto; flex: none; }
+.tabbar .tab { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px 6px 0 0; background: var(--panel); cursor: pointer; font-size: 12px; max-width: 160px; white-space: nowrap; }
+.tabbar .tab.active { background: var(--bg); border-bottom-color: var(--bg); font-weight: 600; }
+.tabbar .tab-title { overflow: hidden; text-overflow: ellipsis; }
+.tabbar .tab-x { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0; }
+.tabbar .tab-x:hover { color: var(--danger, #ef4444); }
+.tabbar .tab-new { border: 1px solid var(--border); background: var(--panel); border-radius: 6px; cursor: pointer; font-size: 14px; line-height: 1; padding: 3px 8px; }
+.tabbar .tab-clear { margin-left: auto; border: 1px solid var(--border); background: var(--panel); border-radius: 6px; cursor: pointer; font-size: 12px; padding: 3px 8px; color: var(--muted); }
+.tabbar .tab-new:hover, .tabbar .tab-clear:hover { background: var(--bg); }
+
 /* Memory manager (modal) */
 .mem-group { margin-bottom: 14px; }
 .mem-card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--bg); }
