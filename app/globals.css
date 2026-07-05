@@ -394,3 +394,4 @@ html, body {
 @media (max-width: 620px) { .dup-pair { grid-template-columns: 1fr; } }
 .dup-side { border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--bg); }
 .dup-side .nom-meta { margin: 4px 0 6px; }
+.panel-header .hdr-project { color: var(--accent); font-weight: 600; }

@@ -159,7 +159,7 @@ function Xray({
 const COMP_COLORS = ["#6366f1", "#8b5cf6", "#0ea5e9", "#f59e0b", "#10b981", "#ef4444", "#ec4899"];
 
 // One chat tab's metadata (mirrors lib/workspace ChatMeta).
-type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessage?: string; openFile?: string | null; agentId?: string };
+type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessage?: string; openFile?: string | null; agentId?: string; projectId?: string };
 
 // A project's config (mirrors lib/project ProjectConfig) — a client can have several.
 type ProjectMeta = { id: string; name: string; client: string; sector: string; type: string; status: string };
@@ -518,7 +518,7 @@ export default function Home() {
   }
 
   async function refreshChats(): Promise<ChatMeta[]> {
-    const list: ChatMeta[] = await fetch(`/api/chats?user=${user}`)
+    const list: ChatMeta[] = await fetch(`/api/chats?user=${user}&project=${project}`)
       .then((r) => r.json())
       .then((d) => d.chats ?? [])
       .catch(() => []);
@@ -530,7 +530,7 @@ export default function Home() {
     const created = await fetch("/api/chats", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user }),
+      body: JSON.stringify({ user, project }),
     }).then((r) => r.json());
     if (created.chat) {
       await refreshChats();
@@ -549,7 +549,7 @@ export default function Home() {
       const created = await fetch("/api/chats", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user }),
+        body: JSON.stringify({ user, project }),
       }).then((r) => r.json());
       list = await refreshChats();
       if (created.chat) openChatMeta(created.chat);
@@ -581,11 +581,13 @@ export default function Home() {
     refreshChats();
   }
 
-  // On user switch: load their tabs (create one if none), open the first.
+  // On user OR project switch: load that user's tabs IN this project (create one
+  // if none), and open the most recent. This is what makes chat history feel
+  // project-specific — each engagement has its own conversation list.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let list: ChatMeta[] = await fetch(`/api/chats?user=${user}`)
+      let list: ChatMeta[] = await fetch(`/api/chats?user=${user}&project=${project}`)
         .then((r) => r.json())
         .then((d) => d.chats ?? [])
         .catch(() => []);
@@ -594,7 +596,7 @@ export default function Home() {
         const created = await fetch("/api/chats", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user }),
+          body: JSON.stringify({ user, project }),
         }).then((r) => r.json());
         if (cancelled) return;
         list = created.chat ? [created.chat] : [];
@@ -606,7 +608,7 @@ export default function Home() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user, project]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -996,7 +998,9 @@ export default function Home() {
 
         {/* Right: Chats — the user's conversation history (click an answer's ▸ x-ray for what informed it) */}
         <div className="panel">
-          <div className="panel-header">Chats · private to {user}</div>
+          <div className="panel-header">
+            Chats · {user} · <span className="hdr-project">{projects.find((p) => p.id === project)?.name ?? project}</span>
+          </div>
           <div className="panel-body">
             <button className="new-chat" onClick={newChat}>＋ New chat</button>
             {chats.length === 0 && <div className="empty">No chats yet.</div>}

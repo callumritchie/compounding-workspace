@@ -16,6 +16,7 @@ import {
   saveChatHistory,
   listChats,
   updateChatMeta,
+  chatProject,
   isUser,
   type Message,
 } from "@/lib/workspace";
@@ -46,10 +47,11 @@ export async function POST(req: Request) {
   const history = await getChatHistory(user, chatId);
   history.push({ role: "user", content: message });
 
-  // What this user's OTHER tabs are working on — compact cross-tab awareness.
+  // What this user's OTHER tabs IN THIS PROJECT are working on (cross-tab awareness
+  // is scoped to the project, so a chat never "sees" work on a different engagement).
   const allChats = await listChats(user);
   const otherTabs = allChats
-    .filter((c) => c.chatId !== chatId)
+    .filter((c) => c.chatId !== chatId && chatProject(c) === project)
     .map((c) => ({ title: c.title, openFile: c.openFile, lastActivity: c.lastUserMessage }));
 
   const projectCfg = await getProjectConfig(project);
