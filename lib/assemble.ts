@@ -31,7 +31,7 @@ const BUDGETS = { stable: 1500, ranked: 800 };
 const STABLE_IMPORTANCE = 0.7; // learned memory this important rides in the stable tier
 
 export type Tier = "stable" | "ranked";
-export type InjectedItem = { id: string; scope: string; type: MemoryType; tier: Tier; tokens: number };
+export type InjectedItem = { id: string; scope: string; type: MemoryType; tier: Tier; tokens: number; text: string };
 export type DroppedItem = { id: string; scope: string; reason: string };
 
 export type ContextReport = {
@@ -78,7 +78,10 @@ function fitToBudget(
     }
     used += tokens;
     lines.push(line);
-    injected.push({ id: m.id, scope: m.scope, type: m.type, tier, tokens });
+    // Carry the memory's actual (short) text so the glass box can show it —
+    // makes clear a memory is a small fact, not a whole file. Truncate defensively.
+    const text = m.body.length > 200 ? `${m.body.slice(0, 200).trimEnd()}…` : m.body;
+    injected.push({ id: m.id, scope: m.scope, type: m.type, tier, tokens, text });
   }
   return lines;
 }

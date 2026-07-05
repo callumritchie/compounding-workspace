@@ -286,8 +286,17 @@ html, body {
 .pill.ranked { background: var(--accent); }  /* volatile tier */
 
 .ctx-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
-.retract { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; padding: 0 2px; }
-.retract:hover { color: var(--accent); }
+.retract { border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; padding: 1px 7px; border-radius: 5px; }
+.retract:hover { color: var(--accent); border-color: var(--accent); }
+
+/* Injected-memory cards (glass box) */
+.ctx-cap { font-size: 11px; color: var(--muted); line-height: 1.5; margin: -2px 0 8px; }
+.mem-inj { padding: 6px 0; border-top: 1px solid var(--border); }
+.mem-inj:first-of-type { border-top: none; padding-top: 0; }
+.mem-inj-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mem-inj-scope { font-size: 11px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; }
+.mem-inj-tok { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.mem-inj-text { font-size: 12px; line-height: 1.5; margin-top: 4px; }
 .feedback { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .feedback button {
   border: 1px solid var(--border); background: var(--bg); border-radius: 6px;
