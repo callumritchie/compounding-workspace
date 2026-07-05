@@ -159,7 +159,7 @@ function Xray({
 const COMP_COLORS = ["#6366f1", "#8b5cf6", "#0ea5e9", "#f59e0b", "#10b981", "#ef4444", "#ec4899"];
 
 // One chat tab's metadata (mirrors lib/workspace ChatMeta).
-type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessage?: string; openFile?: string | null };
+type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessage?: string; openFile?: string | null; agentId?: string };
 
 // A project's config (mirrors lib/project ProjectConfig) — a client can have several.
 type ProjectMeta = { id: string; name: string; client: string; sector: string; type: string; status: string };
@@ -187,6 +187,15 @@ type Nomination = {
   sourceProject: string;
   sourceClient: string;
   created: string;
+};
+// An agent from the roster (the harness config).
+type AgentItem = {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  model: string;
+  tools: string[];
 };
 type Chunk = { file: string; text: string; score: number };
 type CompareResult = {
@@ -240,6 +249,13 @@ export default function Home() {
   const [memDraft, setMemDraft] = useState<Record<string, { body: string; importance: number }>>({});
   const [memNote, setMemNote] = useState<string | null>(null);
 
+  // Agent roster (the harness): the list, the tool catalogue, and the modal state.
+  const [agents, setAgents] = useState<AgentItem[]>([]);
+  const [allTools, setAllTools] = useState<{ name: string; description: string }[]>([]);
+  const [defaultAgentId, setDefaultAgentId] = useState("consulting-teammate");
+  const [showAgents, setShowAgents] = useState(false);
+  const [agentDraft, setAgentDraft] = useState<AgentItem | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Load the file list once (and refresh it after each turn, in case the agent wrote one).
@@ -282,6 +298,54 @@ export default function Home() {
       .catch(() => setProposals([]));
   }
   useEffect(loadProposals, []);
+
+  // Load the agent roster + the tool catalogue (for the harness modal).
+  function loadAgents() {
+    fetch("/api/agents")
+      .then((r) => r.json())
+      .then((d) => {
+        setAgents(d.agents ?? []);
+        setAllTools(d.allTools ?? []);
+        if (d.defaultId) setDefaultAgentId(d.defaultId);
+      })
+      .catch(() => setAgents([]));
+  }
+  useEffect(loadAgents, []);
+
+  // Point the active chat at a different agent (persists on the chat).
+  async function setChatAgent(agentId: string) {
+    if (!activeChat) return;
+    await fetch("/api/chats/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user, chatId: activeChat, agentId }),
+    });
+    refreshChats();
+  }
+
+  // Create or update an agent from the modal, then refresh the roster.
+  async function saveAgentDraft() {
+    if (!agentDraft || !agentDraft.name.trim()) return;
+    const d = await fetch("/api/agents/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent: agentDraft }),
+    }).then((r) => r.json());
+    loadAgents();
+    if (d.agent) setAgentDraft(d.agent);
+  }
+  async function deleteAgentDraft() {
+    if (!agentDraft || agentDraft.id === defaultAgentId) return;
+    if (!confirm(`Delete agent "${agentDraft.name}"? Chats using it fall back to the default.`)) return;
+    await fetch("/api/agents/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: agentDraft.id }),
+    });
+    setAgentDraft(null);
+    loadAgents();
+  }
+
   async function approveProp(id: string) {
     await fetch("/api/memory/proposals/approve", {
       method: "POST",
@@ -693,6 +757,9 @@ export default function Home() {
           <button className="queue-btn" onClick={() => { loadProposals(); setShowProposals(true); }}>
             💡 Suggested{proposals.length ? ` (${proposals.length})` : ""}
           </button>
+          <button className="queue-btn" onClick={() => { loadAgents(); setShowAgents(true); }}>
+            🤖 Agents
+          </button>
           <button className="queue-btn" onClick={() => { loadMemories(); setShowMemory(true); }}>
             🧠 Memory manager
           </button>
@@ -738,6 +805,19 @@ export default function Home() {
           <div className="panel-header">
             {activeChat ? (chats.find((c) => c.chatId === activeChat)?.title || "New chat") : "Chat"}
             {openFile && <span className="badge">this → {openFile.split("/").pop()}</span>}
+            {activeChat && agents.length > 0 && (
+              <span className="agent-pick" title="which agent answers in this chat">
+                🤖
+                <select
+                  value={chats.find((c) => c.chatId === activeChat)?.agentId ?? defaultAgentId}
+                  onChange={(e) => setChatAgent(e.target.value)}
+                >
+                  {agents.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              </span>
+            )}
           </div>
           <div className="chat">
             <div className="messages">
@@ -1018,6 +1098,120 @@ export default function Home() {
       )}
 
       {/* ---- Memory manager (modal) ---- */}
+      {showAgents && (
+        <div className="modal-overlay" onClick={() => setShowAgents(false)}>
+          <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h2>🤖 Agents · the harness</h2>
+              <button onClick={() => setShowAgents(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="empty">
+                An agent is a <b>system prompt + model + tools</b>. Memory (the scope lattice) and your working
+                context are wired into every agent the same way; the loop is always think → call tools → answer.
+                Pick a chat’s agent from the 🤖 menu in the chat header.
+              </div>
+              <div className="agents-layout">
+                <div className="agents-list">
+                  {agents.map((a) => (
+                    <div
+                      key={a.id}
+                      className={`agent-row ${agentDraft?.id === a.id ? "active" : ""}`}
+                      onClick={() => setAgentDraft({ ...a })}
+                    >
+                      <div className="agent-row-name">
+                        {a.name}
+                        {a.id === defaultAgentId && <span className="tag">default</span>}
+                      </div>
+                      <div className="agent-row-desc">{a.description}</div>
+                    </div>
+                  ))}
+                  <button
+                    className="new-chat"
+                    onClick={() =>
+                      setAgentDraft({
+                        id: "",
+                        name: "",
+                        description: "",
+                        systemPrompt: "",
+                        model: "claude-opus-4-8",
+                        tools: allTools.map((t) => t.name),
+                      })
+                    }
+                  >
+                    ＋ New agent
+                  </button>
+                </div>
+                <div className="agent-editor">
+                  {!agentDraft ? (
+                    <div className="empty">Select an agent to view or edit its harness.</div>
+                  ) : (
+                    <>
+                      <label className="fld">
+                        Name
+                        <input value={agentDraft.name} onChange={(e) => setAgentDraft({ ...agentDraft, name: e.target.value })} />
+                      </label>
+                      <label className="fld">
+                        Description
+                        <input value={agentDraft.description} onChange={(e) => setAgentDraft({ ...agentDraft, description: e.target.value })} />
+                      </label>
+                      <label className="fld">
+                        Model
+                        <select value={agentDraft.model} onChange={(e) => setAgentDraft({ ...agentDraft, model: e.target.value })}>
+                          <option value="claude-opus-4-8">claude-opus-4-8</option>
+                          <option value="claude-sonnet-5">claude-sonnet-5</option>
+                          <option value="claude-haiku-4-5">claude-haiku-4-5</option>
+                        </select>
+                      </label>
+                      <label className="fld">
+                        System prompt
+                        <textarea
+                          className="agent-prompt"
+                          value={agentDraft.systemPrompt}
+                          onChange={(e) => setAgentDraft({ ...agentDraft, systemPrompt: e.target.value })}
+                        />
+                      </label>
+                      <div className="fld">
+                        Tools this agent may call
+                        <div className="tool-checks">
+                          {allTools.map((t) => (
+                            <label key={t.name} className="tool-check" title={t.description}>
+                              <input
+                                type="checkbox"
+                                checked={agentDraft.tools.includes(t.name)}
+                                onChange={(e) =>
+                                  setAgentDraft({
+                                    ...agentDraft,
+                                    tools: e.target.checked
+                                      ? [...agentDraft.tools, t.name]
+                                      : agentDraft.tools.filter((x) => x !== t.name),
+                                  })
+                                }
+                              />
+                              {t.name}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="ctx-cap">
+                        Always wired in (not editable): scope-lattice memory · working context · the
+                        think→tools→answer loop.
+                      </div>
+                      <div className="mem-actions">
+                        <button className="mini" onClick={saveAgentDraft}>Save</button>
+                        {agentDraft.id && agentDraft.id !== defaultAgentId && (
+                          <button className="reject" onClick={deleteAgentDraft}>Delete</button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showMemory && (
         <div className="modal-overlay" onClick={() => setShowMemory(false)}>
           <div className="modal wide" onClick={(e) => e.stopPropagation()}>

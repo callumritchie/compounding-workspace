@@ -19,11 +19,12 @@ import {
   isUser,
   type Message,
 } from "@/lib/workspace";
-import { runAgent, SYSTEM_BASE, type AgentEvent } from "@/lib/agent";
+import { runAgent, type AgentEvent } from "@/lib/agent";
 import { buildWorkingContext } from "@/lib/context";
 import { assembleContext, estimateTokens } from "@/lib/assemble";
 import { getMemoriesForContext } from "@/lib/memory";
 import { getProjectConfig } from "@/lib/project";
+import { getAgent } from "@/lib/agents";
 import { TOOLS } from "@/lib/tools";
 import { listFiles, DEFAULT_PROJECT } from "@/lib/corpus";
 
@@ -60,6 +61,11 @@ export async function POST(req: Request) {
     stakeholders: projectCfg.stakeholders,
   });
 
+  // Which agent is this chat running? (Its persona/model/tools drive the turn.)
+  const chatMeta = allChats.find((c) => c.chatId === chatId);
+  const agent = await getAgent(chatMeta?.agentId);
+  const agentTools = agent.tools?.length ? TOOLS.filter((t) => agent.tools.includes(t.name)) : TOOLS;
+
   // Assemble memory (labelled, split into cache-stable + query-ranked tiers).
   const memories = await getMemoriesForContext(user, project);
   const assembled = assembleContext(memories, workingContext);
@@ -67,8 +73,8 @@ export async function POST(req: Request) {
   // Break the input prompt into parts for the composition bar.
   const priorHistory = history.slice(0, -1).map((m) => m.content).join("\n");
   const composition = [
-    { label: "Persona", tokens: estimateTokens(SYSTEM_BASE), tier: "cached" },
-    { label: "Tool schemas", tokens: estimateTokens(JSON.stringify(TOOLS)), tier: "cached" },
+    { label: "Persona", tokens: estimateTokens(agent.systemPrompt), tier: "cached" },
+    { label: "Tool schemas", tokens: estimateTokens(JSON.stringify(agentTools)), tier: "cached" },
     { label: "Stable memory", tokens: estimateTokens(assembled.stableBlock), tier: "cached" },
     { label: "Ranked memory", tokens: estimateTokens(assembled.rankedBlock), tier: "volatile" },
     { label: "Working context", tokens: estimateTokens(workingContext), tier: "volatile" },
@@ -91,7 +97,13 @@ export async function POST(req: Request) {
       try {
         const result = await runAgent(
           history,
-          { projectId: project, user, stableBlock: assembled.stableBlock, volatileBlock: assembled.volatileBlock },
+          {
+            projectId: project,
+            user,
+            stableBlock: assembled.stableBlock,
+            volatileBlock: assembled.volatileBlock,
+            agent: { systemPrompt: agent.systemPrompt, model: agent.model, toolNames: agent.tools },
+          },
           (ev: AgentEvent) => send(ev)
         );
 

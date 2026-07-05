@@ -54,15 +54,32 @@ export type AgentResult = { text: string; trace: TraceEntry[]; usage: Usage; rea
 
 // The agent loop. Streams as it goes: pass `onEvent` to receive thinking / tool /
 // text events live; omit it to just run to completion (used by the eval + compare).
+export type AgentSpec = { systemPrompt: string; model: string; toolNames?: string[] };
+
 export async function runAgent(
   messages: Message[],
-  opts: { projectId: string; user: string; stableBlock?: string; volatileBlock?: string },
+  opts: {
+    projectId: string;
+    user: string;
+    stableBlock?: string;
+    volatileBlock?: string;
+    agent?: AgentSpec; // which agent (persona/model/tools); omitted → the default
+  },
   onEvent?: (ev: AgentEvent) => void
 ): Promise<AgentResult> {
+  // Resolve the agent harness: its system prompt, model, and the subset of tools
+  // it may call. Omitting `agent` (eval + compare) keeps the shipped defaults.
+  const persona = opts.agent?.systemPrompt ?? SYSTEM_BASE;
+  const model = opts.agent?.model || MODEL;
+  const tools =
+    opts.agent?.toolNames && opts.agent.toolNames.length
+      ? TOOLS.filter((t) => opts.agent!.toolNames!.includes(t.name))
+      : TOOLS;
+
   // Order the prompt stable → volatile. The stable block (persona + constitution
   // + high-importance memory) sits behind a cache breakpoint; the volatile block
   // (ranked memory + working context) comes after and is never cached.
-  const stableSystem = opts.stableBlock ? `${SYSTEM_BASE}\n\n${opts.stableBlock}` : SYSTEM_BASE;
+  const stableSystem = opts.stableBlock ? `${persona}\n\n${opts.stableBlock}` : persona;
   const system: Anthropic.TextBlockParam[] = [
     { type: "text", text: stableSystem, cache_control: { type: "ephemeral" } },
   ];
@@ -82,11 +99,11 @@ export async function runAgent(
     try {
       // Stream the model call so we can surface thinking + answer text live.
       const stream = client.messages.stream({
-        model: MODEL,
+        model,
         max_tokens: 4096,
         thinking: { type: "adaptive" }, // let the model think as much as the task needs
         system,
-        tools: TOOLS,
+        tools,
         messages: convo,
       });
       for await (const event of stream) {
@@ -168,7 +185,7 @@ export async function runAgent(
 // Non-streaming wrapper — used by the eval harness and /api/compare.
 export async function respond(
   messages: Message[],
-  opts: { projectId: string; user: string; stableBlock?: string; volatileBlock?: string }
+  opts: { projectId: string; user: string; stableBlock?: string; volatileBlock?: string; agent?: AgentSpec }
 ): Promise<AgentResult> {
   return runAgent(messages, opts);
 }

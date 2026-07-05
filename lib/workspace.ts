@@ -37,6 +37,7 @@ export type ChatMeta = {
   updated: string;
   lastUserMessage?: string;
   openFile?: string | null;
+  agentId?: string; // which agent from the roster this chat uses (undefined = default)
 };
 
 // The two simulated users. Switching between them is how we demo "shared vs

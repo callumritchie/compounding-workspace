@@ -349,3 +349,22 @@ html, body {
   padding: 3px 10px; cursor: pointer; font-size: 12px;
 }
 .feedback button:hover { border-color: var(--accent); }
+
+/* Agent roster (the harness) */
+.agent-pick { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 12px; }
+.agent-pick select { border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; background: var(--bg); font: inherit; font-size: 12px; }
+.agents-layout { display: grid; grid-template-columns: 220px 1fr; gap: 14px; margin-top: 10px; }
+@media (max-width: 760px) { .agents-layout { grid-template-columns: 1fr; } }
+.agents-list { display: flex; flex-direction: column; gap: 6px; }
+.agent-row { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; cursor: pointer; background: var(--bg); }
+.agent-row:hover { background: var(--panel); }
+.agent-row.active { background: var(--accent-soft); border-color: var(--accent); }
+.agent-row-name { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.agent-row-name .tag { font-size: 10px; font-weight: 600; text-transform: uppercase; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; }
+.agent-row-desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.agent-editor { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.fld input, .fld select { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; font-weight: 400; color: var(--ink); background: var(--bg); }
+.agent-prompt { min-height: 160px; resize: vertical; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit; font-weight: 400; color: var(--ink); background: var(--bg); line-height: 1.5; }
+.tool-checks { display: flex; flex-wrap: wrap; gap: 8px; font-weight: 400; }
+.tool-check { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
