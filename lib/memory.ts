@@ -72,14 +72,17 @@ export async function readMemoriesInScope(scope: string): Promise<Memory[]> {
 }
 
 // The scopes that apply to a user on a project, broad → specific. This is the
-// scope LATTICE: company → sector → client → project → personal. A memory
-// promoted to "sector/healthcare" is seen by every healthcare project.
+// scope LATTICE: company → sector → client → stakeholder → project → personal.
+// A memory promoted to "sector/healthcare" is seen by every healthcare project;
+// a "stakeholder/<id>" memory follows that PERSON onto any project they're on
+// (even a different client) — which is why it sits above project.
 export function scopesFor(user: string, cfg: ProjectConfig): string[] {
   return [
     "company/policy",
     "company/lessons",
     `sector/${cfg.sector}`,
     `client/${cfg.client}`,
+    ...cfg.stakeholders.map((s) => `stakeholder/${s.id}`),
     `project/${cfg.id}`,
     `personal/${user}`,
   ];

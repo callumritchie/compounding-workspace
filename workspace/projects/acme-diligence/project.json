@@ -4,5 +4,8 @@
   "client": "acme",
   "sector": "healthcare",
   "type": "diligence",
-  "status": "complete"
+  "status": "complete",
+  "stakeholders": [
+    { "id": "acme-cfo", "name": "Jane Okafor", "role": "CFO" }
+  ]
 }
