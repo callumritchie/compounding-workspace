@@ -23,7 +23,7 @@ import {
 import { runAgent, type AgentEvent } from "@/lib/agent";
 import { buildWorkingContext } from "@/lib/context";
 import { assembleContext, estimateTokens } from "@/lib/assemble";
-import { getMemoriesForContext, recordMemoryUse } from "@/lib/memory";
+import { getMemoriesForContext, recordMemoryUse, graduateOnUse } from "@/lib/memory";
 import { getProjectConfig } from "@/lib/project";
 import { getAgent } from "@/lib/agents";
 import { TOOLS } from "@/lib/tools";
@@ -94,7 +94,11 @@ export async function POST(req: Request) {
 
   // Usage signal: record that these memories were actually injected this turn
   // (fire-and-forget; powers "most-used" sorting + staleness). Not on the hot path.
-  void recordMemoryUse(injected.map((m) => ({ scope: m.scope, id: m.id })));
+  const injectedRefs = injected.map((m) => ({ scope: m.scope, id: m.id }));
+  void recordMemoryUse(injectedRefs);
+  // Graduation signal: any provisional memory leaned on here moves one step closer
+  // to becoming trusted — earning its place through use, not an approval click.
+  void graduateOnUse(injectedRefs);
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({

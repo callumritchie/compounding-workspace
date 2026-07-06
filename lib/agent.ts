@@ -14,8 +14,14 @@
 --------------------------------------------------------------------------- */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { promises as fs } from "fs";
+import path from "path";
+import { createHash } from "crypto";
 import type { Message } from "./workspace";
 import { TOOLS, executeTool, type TraceEntry } from "./tools";
+import { getMemoriesForContext } from "./memory";
+import { readFile } from "./corpus";
+import { getProjectConfig } from "./project";
 
 // The reasoning engine. `claude-opus-4-8` is Anthropic's most capable Opus model.
 const MODEL = "claude-opus-4-8";
@@ -230,6 +236,164 @@ export async function answerFromContext(query: string, context: string): Promise
     messages: [{ role: "user", content: `Context passages:\n${context}\n\nQuestion: ${query}` }],
   });
   return textOf(response) || "(no answer)";
+}
+
+/* ---------------------------------------------------------------------------
+   Cold-start helpers — one-shot Claude calls (no agent loop) that make a fresh
+   project feel warm: a "what we already know" brief, click-to-send starter
+   questions, and short intake questions whose answers seed provisional memory.
+--------------------------------------------------------------------------- */
+
+// Pull the first JSON object out of a model response, tolerating prose/fences.
+function parseJsonObject<T>(text: string, fallback: T): T {
+  try {
+    const match = text.match(/\{[\s\S]*\}/);
+    return match ? (JSON.parse(match[0]) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+// Render the inherited, in-scope memory for a project as a plain bullet list the
+// helper prompts can ground on. Personal prefs are excluded — a kickoff brief is
+// about what the TEAM knows about the engagement, not one user's preferences.
+async function inheritedMemoryLines(projectId: string, user: string): Promise<string> {
+  const mems = await getMemoriesForContext(user, projectId);
+  return mems
+    .filter((m) => !m.scope.startsWith("personal/"))
+    .map((m) => `- [${m.scope}] ${m.body}`)
+    .join("\n");
+}
+
+export type Kickoff = { brief: string; questions: string[] };
+
+// Where a project's cached kickoff lives. Regenerated only when its inputs (the
+// inherited memory + brief) change — the brief is an LLM call, so we don't pay it
+// on every project open.
+function kickoffCacheFile(projectId: string): string {
+  return path.join(process.cwd(), "workspace", "projects", projectId, "kickoff.json");
+}
+
+// draftKickoff — the day-one briefing. Assembles everything the firm already
+// knows that applies to this project (sector playbook, client account lessons,
+// stakeholder prefs, firm policy) plus the kick-off brief file, and turns it into
+// a short "what we know going in" summary + three grounded starter questions.
+// Cached against a signature of its inputs; pass {refresh:true} to force a rebuild
+// (e.g. after intake adds facts).
+export async function draftKickoff(projectId: string, user: string, opts?: { refresh?: boolean }): Promise<Kickoff> {
+  const cfg = await getProjectConfig(projectId);
+  const memory = await inheritedMemoryLines(projectId, user);
+  const brief = await readFile(projectId, "brief.md").catch(() => "");
+
+  // Signature of the inputs: if unchanged since last time, reuse the cached brief.
+  const sig = createHash("sha1").update(`${user}\n${memory}\n${brief}`).digest("hex");
+  const cacheFile = kickoffCacheFile(projectId);
+  if (!opts?.refresh) {
+    try {
+      const cached = JSON.parse(await fs.readFile(cacheFile, "utf8")) as Kickoff & { sig?: string };
+      if (cached.sig === sig) return { brief: cached.brief, questions: cached.questions };
+    } catch {
+      /* no cache yet */
+    }
+  }
+
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 600,
+    system:
+      "You brief a consultant starting a project, using ONLY the inherited team memory and kick-off brief provided. " +
+      "Write for a non-technical reader. Return STRICT JSON: " +
+      `{"brief": string, "questions": string[]}. ` +
+      "brief = 3-5 plain sentences on what we already know going in (the sector, this client, key people, firm approach); " +
+      "if little is known, say so honestly and keep it short. " +
+      "questions = exactly 3 short, specific starter questions the consultant could click to ask right now, " +
+      "each motivated by something in the memory or brief. No preamble, JSON only.",
+    messages: [
+      {
+        role: "user",
+        content:
+          `Project: ${cfg.name} — client "${cfg.client}", sector ${cfg.sector}, type ${cfg.type}.\n\n` +
+          `Inherited team memory:\n${memory || "(none yet)"}\n\n` +
+          `Kick-off brief:\n${brief ? brief.slice(0, 2000) : "(no brief file)"}\n\nJSON:`,
+      },
+    ],
+  });
+  const parsed = parseJsonObject<Kickoff>(textOf(response), { brief: "", questions: [] });
+  const result: Kickoff = {
+    brief: typeof parsed.brief === "string" ? parsed.brief.trim() : "",
+    questions: Array.isArray(parsed.questions) ? parsed.questions.filter((q) => typeof q === "string").slice(0, 3) : [],
+  };
+  await fs.writeFile(cacheFile, JSON.stringify({ sig, ...result }, null, 2), "utf8").catch(() => {});
+  return result;
+}
+
+export type FileSuggestions = { questions: string[]; gaps: string[] };
+
+// suggestFromFile — turn a just-uploaded file into momentum: a couple of
+// questions the consultant can now answer from it, and any obvious gaps worth
+// noting. Grounded strictly in the file's own content.
+export async function suggestFromFile(projectId: string, filePath: string): Promise<FileSuggestions> {
+  const content = await readFile(projectId, filePath).catch(() => "");
+  if (!content.trim()) return { questions: [], gaps: [] };
+
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 400,
+    system:
+      "A consultant just added a document to a project. Using ONLY its content, return STRICT JSON: " +
+      `{"questions": string[], "gaps": string[]}. ` +
+      "questions = 2-3 short, specific questions this document now lets them ask (things it can answer). " +
+      "gaps = 0-2 short notes on what it notably does NOT cover. JSON only, no preamble.",
+    messages: [{ role: "user", content: `Document "${filePath}":\n${content.slice(0, 4000)}\n\nJSON:` }],
+  });
+  const parsed = parseJsonObject<FileSuggestions>(textOf(response), { questions: [], gaps: [] });
+  return {
+    questions: Array.isArray(parsed.questions) ? parsed.questions.filter((q) => typeof q === "string").slice(0, 3) : [],
+    gaps: Array.isArray(parsed.gaps) ? parsed.gaps.filter((g) => typeof g === "string").slice(0, 2) : [],
+  };
+}
+
+// intakeQuestions — a short, friendly kickoff interview tailored to this kind of
+// project. Answers seed project memory, so ask the few things that make every
+// later answer better: the goal, the key people, the hard constraints.
+export async function intakeQuestions(projectId: string): Promise<string[]> {
+  const cfg = await getProjectConfig(projectId);
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 250,
+    system:
+      "You are kicking off a new consulting project. Propose exactly 3 short intake questions whose answers " +
+      "would make future help sharply better — focus on the objective / what success looks like, the key people " +
+      `and how they decide, and the hard constraints (deadlines, budget, red lines). Tailor them to a ${cfg.type} ` +
+      `project in ${cfg.sector}. Return STRICT JSON: {"questions": string[]}. JSON only.`,
+    messages: [{ role: "user", content: `Project: ${cfg.name} (client "${cfg.client}"). JSON:` }],
+  });
+  const parsed = parseJsonObject<{ questions: string[] }>(textOf(response), { questions: [] });
+  return Array.isArray(parsed.questions) ? parsed.questions.filter((q) => typeof q === "string").slice(0, 3) : [];
+}
+
+// distillFacts — turn free-text intake answers into clean, one-sentence project
+// facts suitable for memory. Drops empties; keeps only the durable substance.
+export async function distillFacts(projectId: string, answers: { question: string; answer: string }[]): Promise<string[]> {
+  const filled = answers.filter((a) => a.answer.trim());
+  if (filled.length === 0) return [];
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 400,
+    system:
+      "Turn each answered kickoff question into ONE durable, self-contained fact about the project, phrased so it " +
+      "reads well out of context (include the subject, not just 'yes'). Skip anything vague or non-durable. " +
+      `Return STRICT JSON: {"facts": string[]}. JSON only.`,
+    messages: [
+      {
+        role: "user",
+        content:
+          filled.map((a, i) => `Q${i + 1}: ${a.question}\nA${i + 1}: ${a.answer}`).join("\n\n") + "\n\nJSON:",
+      },
+    ],
+  });
+  const parsed = parseJsonObject<{ facts: string[] }>(textOf(response), { facts: [] });
+  return Array.isArray(parsed.facts) ? parsed.facts.filter((f) => typeof f === "string" && f.trim()).map((f) => f.trim()) : [];
 }
 
 // LLM-as-reranker: reorder retrieved passages by true relevance and return the

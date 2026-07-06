@@ -56,6 +56,9 @@ function label(m: Memory): string {
     if (m.scope.startsWith("personal/")) return "USER PREFERENCE [authoritative]";
     return `CONSTITUTION [${m.scope}]`;
   }
+  // Provisional = captured but not yet confirmed by use. Flag it as unconfirmed so
+  // the model weighs it cautiously (and verifies) until it graduates to a LESSON.
+  if (m.status === "provisional") return `PROVISIONAL [${m.scope} · unconfirmed — verify before relying]`;
   return `LESSON [${m.scope} · learned · importance ${m.importance}]`;
 }
 
@@ -87,7 +90,10 @@ function fitToBudget(
 }
 
 export function assembleContext(memories: Memory[], workingContext: string): AssembledContext {
-  const isStable = (m: Memory) => m.type === "constitution" || m.importance >= STABLE_IMPORTANCE;
+  // Provisional memory always rides in the ranked (non-cached, "verify before
+  // relying") tier, regardless of importance — it isn't trusted enough to cache.
+  const isStable = (m: Memory) =>
+    m.status !== "provisional" && (m.type === "constitution" || m.importance >= STABLE_IMPORTANCE);
   const byImportance = (a: Memory, b: Memory) => b.importance - a.importance;
 
   const stableMems = memories.filter(isStable).sort(byImportance);

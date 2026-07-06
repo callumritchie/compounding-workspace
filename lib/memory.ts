@@ -124,23 +124,32 @@ export async function getMemoriesForContext(user: string, projectId: string): Pr
 }
 
 // Create/append a memory file. Used by the agent's "remember" tool. New learned
-// memories are born at low importance (they must earn trust).
+// memories are born at low importance (they must earn trust). A memory can be
+// born "provisional" (status): still injected, but flagged unconfirmed until it
+// earns trust through use (see graduateOnUse) — this is how kickoff captures
+// facts without demanding the user approve each one.
 export async function writeMemory(input: {
   scope: string;
   type?: MemoryType;
   body: string;
   importance?: number;
+  status?: string;
   provenance?: Record<string, unknown>;
   appliesTo?: Record<string, string>;
 }): Promise<Memory> {
   const dir = path.join(MEM_ROOT, input.scope);
   await fs.mkdir(dir, { recursive: true });
-  const id = `mem_${Date.now().toString(36)}`;
+  // Random suffix so several memories written in the same millisecond (e.g. the
+  // kickoff interview distilling multiple facts in parallel) get distinct ids
+  // instead of colliding on one filename and overwriting each other.
+  const id = `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
   const data: Record<string, unknown> = {
     id,
     type: input.type ?? "learned",
     importance: input.importance ?? 0.2,
   };
+  if (input.status) data.status = input.status;
+  if (input.status === "provisional") data.used_since_provisional = 0;
   if (input.appliesTo) data.applies_to = input.appliesTo;
   if (input.provenance) data.provenance = input.provenance;
 
@@ -152,6 +161,7 @@ export async function writeMemory(input: {
     scope: input.scope,
     type: (data.type as MemoryType) ?? "learned",
     importance: data.importance as number,
+    status: input.status ?? "active",
     appliesTo: input.appliesTo,
     provenance: input.provenance,
     body: input.body,
@@ -203,6 +213,13 @@ async function updateMemoryFrontmatter(
 export async function reinforceMemory(scope: string, id: string, delta: number): Promise<boolean> {
   return updateMemoryFrontmatter(scope, id, (data) => {
     if (data.type === "constitution") return; // authoritative — leave untouched
+    // A provisional (unconfirmed) memory that gets contradicted (👎) hasn't earned
+    // its place — retract it outright rather than merely nudging it down.
+    if (data.status === "provisional" && delta < 0) {
+      data.status = "retracted";
+      data.last_reinforced = new Date().toISOString().slice(0, 10);
+      return;
+    }
     const current = typeof data.importance === "number" ? data.importance : 0.3;
     data.importance = Math.max(0, Math.min(1, Number((current + delta).toFixed(3))));
     data.last_reinforced = new Date().toISOString().slice(0, 10);
@@ -308,4 +325,30 @@ export async function touchMemory(scope: string, id: string): Promise<boolean> {
   return updateMemoryFrontmatter(scope, id, (data) => {
     data.last_used = new Date().toISOString().slice(0, 10);
   });
+}
+
+// How many times a provisional memory must be injected (without being contradicted)
+// before it graduates to a trusted, "active" memory.
+export const GRADUATION_THRESHOLD = 3;
+
+// Graduate provisional memories through USE, not approval. For each provisional
+// memory injected this turn, bump its counter; once it's been leaned on enough
+// times without a 👎 retracting it first, flip it to "active" and lift its
+// importance so it stops carrying the "unconfirmed" label. This is the payoff of
+// the provisional model: kickoff facts earn trust silently as the agent uses them.
+export async function graduateOnUse(refs: { scope: string; id: string }[]): Promise<void> {
+  await Promise.all(
+    refs.map(({ scope, id }) =>
+      updateMemoryFrontmatter(scope, id, (data) => {
+        if (data.status !== "provisional") return; // only provisional memories graduate
+        const seen = (typeof data.used_since_provisional === "number" ? data.used_since_provisional : 0) + 1;
+        data.used_since_provisional = seen;
+        if (seen >= GRADUATION_THRESHOLD) {
+          data.status = "active";
+          const current = typeof data.importance === "number" ? data.importance : 0.2;
+          data.importance = Math.max(current, 0.4); // confirmed by use — now meaningful
+        }
+      }).catch(() => false)
+    )
+  );
 }

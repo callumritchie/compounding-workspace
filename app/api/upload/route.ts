@@ -9,6 +9,7 @@
 import { extractText } from "@/lib/ingest";
 import { writeFile, DEFAULT_PROJECT } from "@/lib/corpus";
 import { addFileToIndex } from "@/lib/vectors";
+import { suggestFromFile } from "@/lib/agent";
 
 export async function POST(req: Request) {
   const form = await req.formData();
@@ -35,5 +36,15 @@ export async function POST(req: Request) {
   } catch {
     // extraction/write succeeded even if embedding hiccuped; surface 0 chunks
   }
-  return Response.json({ file: rel, chunks });
+
+  // Turn the upload into momentum: questions this file now lets the user ask.
+  // Best-effort — a hiccup here must not fail the upload itself.
+  let suggestions: { questions: string[]; gaps: string[] } = { questions: [], gaps: [] };
+  try {
+    suggestions = await suggestFromFile(project, rel);
+  } catch {
+    /* leave suggestions empty */
+  }
+
+  return Response.json({ file: rel, chunks, suggestions });
 }

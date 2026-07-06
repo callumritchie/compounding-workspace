@@ -4,12 +4,12 @@
   "private": true,
   "description": "A local, minimal workspace for learning context engineering (RAG + memory).",
   "scripts": {
-    "dev": "next dev",
+    "dev": "sh scripts/with-env.sh next dev",
     "build": "next build",
-    "start": "next start",
-    "eval": "tsx scripts/eval.ts",
-    "index": "tsx scripts/build-index.ts",
-    "check:corpus": "tsx scripts/check-corpus.ts"
+    "start": "sh scripts/with-env.sh next start",
+    "eval": "sh scripts/with-env.sh tsx scripts/eval.ts",
+    "index": "sh scripts/with-env.sh tsx scripts/build-index.ts",
+    "check:corpus": "sh scripts/with-env.sh tsx scripts/check-corpus.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
