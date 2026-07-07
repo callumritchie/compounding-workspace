@@ -246,6 +246,9 @@ export async function leakCheckLLM(text: string, clientName: string): Promise<{ 
 // general, reusable one — stripping client names and identifying specifics.
 export async function abstractLesson(fact: string, clientName: string, scopeLabel: string): Promise<string> {
   const response = await client.messages.create({
+    // Opus: abstraction is confidentiality-sensitive (it must reliably strip
+    // identifying detail while preserving the transferable insight) — worth the
+    // stronger model even though it's an auxiliary call.
     model: MODEL,
     max_tokens: 300,
     system:
@@ -330,7 +333,7 @@ export async function draftKickoff(projectId: string, user: string, opts?: { ref
   }
 
   const response = await client.messages.create({
-    model: MODEL,
+    model: FAST_MODEL,
     max_tokens: 600,
     system:
       "You brief a consultant starting a project, using ONLY the inherited team memory and kick-off brief provided. " +
@@ -369,7 +372,7 @@ export async function suggestFromFile(projectId: string, filePath: string): Prom
   if (!content.trim()) return { questions: [], gaps: [] };
 
   const response = await client.messages.create({
-    model: MODEL,
+    model: FAST_MODEL,
     max_tokens: 400,
     system:
       "A consultant just added a document to a project. Using ONLY its content, return STRICT JSON: " +
@@ -391,7 +394,7 @@ export async function suggestFromFile(projectId: string, filePath: string): Prom
 export async function intakeQuestions(projectId: string): Promise<string[]> {
   const cfg = await getProjectConfig(projectId);
   const response = await client.messages.create({
-    model: MODEL,
+    model: FAST_MODEL,
     max_tokens: 250,
     system:
       "You are kicking off a new consulting project. Propose exactly 3 short intake questions whose answers " +
@@ -410,7 +413,7 @@ export async function distillFacts(projectId: string, answers: { question: strin
   const filled = answers.filter((a) => a.answer.trim());
   if (filled.length === 0) return [];
   const response = await client.messages.create({
-    model: MODEL,
+    model: FAST_MODEL,
     max_tokens: 400,
     system:
       "Turn each answered kickoff question into ONE durable, self-contained fact about the project, phrased so it " +
@@ -473,7 +476,7 @@ export async function inferNextActions(projectId: string, user: string, recent: 
   }
 
   const response = await client.messages.create({
-    model: MODEL,
+    model: FAST_MODEL,
     max_tokens: 1500, // room for stage + 3-4 full-sentence actions + an offer, so the JSON never truncates
     system:
       "You guide a consultant through a client engagement by inferring, from the real state below, WHERE the " +

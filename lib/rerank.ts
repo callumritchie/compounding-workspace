@@ -13,7 +13,9 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 
-const MODEL = "claude-opus-4-8";
+// Reranking is a lightweight relevance-scoring task — Haiku handles it well at a
+// fraction of the latency/cost of the main model.
+const MODEL = "claude-haiku-4-5";
 const client = new Anthropic();
 
 function textOf(response: Anthropic.Message): string {
