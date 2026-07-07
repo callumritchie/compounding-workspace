@@ -40,6 +40,7 @@ async function main() {
   const { assembleContext } = await import("../lib/assemble");
   const { leakCheck } = await import("../lib/promotion");
   const { canApprove } = await import("../lib/team");
+  const { engagementDigest, engagementSummary } = await import("../lib/engagement");
 
   // ---- P1: no lost updates under concurrent writes -------------------------
   // The whole point of moving to a transactional store. Fire many writes at one
@@ -101,6 +102,37 @@ async function main() {
   const pinItem = asm.report.injected.find((i) => i.id === pin2.id);
   check("P4 high-importance non-pinned learned is NOT in cached tier", hotItem?.tier === "ranked", `tier=${hotItem?.tier}`);
   check("P4 pinned learned IS in cached tier", pinItem?.tier === "stable", `tier=${pinItem?.tier}`);
+
+  // ---- Engagement constraints: deterministic digest surfaces the pressures ---
+  // The always-on constraints block is computed with no LLM, so it must reliably
+  // show budget %, the at-risk milestone, and the top risk — that's what makes the
+  // agent's advice land in reality.
+  const eng = {
+    sow: "Fixed-fee strategy engagement",
+    budget: { total: 180000, spent: 121000, currency: "USD" },
+    timeline: {
+      phase: "Synthesis",
+      end: "2030-01-01",
+      milestones: [
+        { name: "Discovery", due: "2020-01-01", status: "done" },
+        { name: "Draft recommendation", due: "2030-01-01", status: "at-risk" },
+      ],
+    },
+    scope: { in: ["strategy"], out: ["vendor selection"], changeRequests: [] },
+    team: [{ name: "Bob", role: "Analyst", availability: "full-time" }],
+    risks: [
+      { text: "budget 67% spent, synthesis incomplete", severity: "medium" },
+      { text: "synthesis behind the draft date", severity: "high" },
+    ],
+  };
+  const digest = engagementDigest(eng);
+  check("Engagement digest shows budget %", digest.includes("67% spent"), digest.split("\n").find((l) => l.includes("Budget")) ?? "");
+  check("Engagement digest flags the at-risk milestone", /Draft recommendation.*AT RISK/.test(digest));
+  check("Engagement digest does NOT flag a done milestone", !/Discovery.*AT RISK/.test(digest));
+  check("Engagement digest surfaces the high-severity risk first", /Active risks: \[high\]/.test(digest));
+  const sum = engagementSummary(eng);
+  check("Engagement summary picks the at-risk next milestone", sum.nextMilestone?.name === "Draft recommendation" && sum.nextMilestone.atRisk === true, JSON.stringify(sum.nextMilestone));
+  check("Engagement summary reports budget %", sum.budgetPct === 67, `budgetPct=${sum.budgetPct}`);
 
   // ---- Governance: analyst blocked on shared scopes, lead allowed ----------
   check("Gov analyst cannot approve company-level", canApprove("bob", "company/lessons") === false);

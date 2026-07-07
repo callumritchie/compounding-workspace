@@ -265,6 +265,17 @@ function canApproveScope(u: string, scope: string): boolean {
   return CLIENT_ROLES[u] === "lead";
 }
 type Leak = { flagged: boolean; hits: string[]; reasons?: string[] };
+
+// Mirror of lib/engagement.ts EngagementSummary (kept local so the client bundle
+// doesn't pull server-only deps). Fed by GET /api/engagement.
+type EngSummary = {
+  phase?: string;
+  budgetPct?: number;
+  budgetLabel?: string;
+  endsInDays?: number | null;
+  nextMilestone?: { name: string; due?: string; atRisk: boolean };
+  topRisk?: { text: string; severity?: string };
+};
 type Signal = {
   pattern: string;
   count: number;
@@ -306,6 +317,9 @@ export default function Home() {
   // forget so it never blocks a turn; refreshed as the engagement moves.
   const [nextActions, setNextActions] = useState<NextActions | null>(null);
   const [compassDismissed, setCompassDismissed] = useState(false);
+  // Engagement strip: the standing constraints (phase · budget · next milestone ·
+  // top risk) shown at the top of the chat column. Loaded from /api/engagement.
+  const [engagement, setEngagement] = useState<EngSummary | null>(null);
   // Bottom-right proactive popup: which items the user has dismissed this session
   // (keyed by a stable id), and whether the whole popup is collapsed.
   const [popupDismissed, setPopupDismissed] = useState<Record<string, boolean>>({});
@@ -460,6 +474,16 @@ export default function Home() {
     if (activeChat && messages.length > 0 && !loading) loadNextActions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChat, project, user, messages.length, loading]);
+
+  // Load the engagement constraints strip for the active project. Refetch when the
+  // engagement.md editor closes (openFile → null) so edits show immediately.
+  useEffect(() => {
+    fetch(`/api/engagement?project=${project}`)
+      .then((r) => r.json())
+      .then((d) => setEngagement(d.summary ?? null))
+      .catch(() => setEngagement(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, openFile]);
 
   // Reset the guidance surfaces when switching chat or project so stale
   // suggestions never linger and a re-dismissed strip can reappear.
@@ -1139,6 +1163,33 @@ export default function Home() {
             )}
           </div>
           <div className="chat">
+            {/* Engagement strip: the standing constraints frame, always visible.
+                Click to open engagement.md and edit the underlying constraints. */}
+            {engagement && (
+              <button
+                className="engagement-strip"
+                title="Open the engagement brief (SOW, budget, timeline, scope, risks)"
+                onClick={() => openFileFn("engagement.md")}
+              >
+                <span className="eng-tag">📋 Engagement</span>
+                {engagement.phase && <span className="eng-item">{engagement.phase}</span>}
+                {engagement.budgetLabel && (
+                  <span className={`eng-item${(engagement.budgetPct ?? 0) >= 80 ? " eng-warn" : ""}`}>{engagement.budgetLabel}</span>
+                )}
+                {engagement.nextMilestone && (
+                  <span className={`eng-item${engagement.nextMilestone.atRisk ? " eng-risk" : ""}`}>
+                    {engagement.nextMilestone.atRisk ? "⚠ " : "→ "}
+                    {engagement.nextMilestone.name}
+                    {engagement.nextMilestone.due ? ` (${engagement.nextMilestone.due})` : ""}
+                  </span>
+                )}
+                {engagement.topRisk && (
+                  <span className="eng-item eng-risk" title={engagement.topRisk.text}>
+                    ⚠ {engagement.topRisk.text.length > 46 ? engagement.topRisk.text.slice(0, 46) + "…" : engagement.topRisk.text}
+                  </span>
+                )}
+              </button>
+            )}
             <div className="messages">
               {/* Warm start: on a cold project, proactively show what we already know
                   + starter questions + an optional 3-question kickoff interview. */}

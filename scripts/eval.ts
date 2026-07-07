@@ -68,6 +68,12 @@ async function run() {
   const { buildWorkingContext } = await import("../lib/context");
   const { getMemoriesForContext } = await import("../lib/memory");
   const { assembleContext } = await import("../lib/assemble");
+  const { getEngagement, engagementDigest } = await import("../lib/engagement");
+
+  // Mirror the chat route: the engagement constraints ride the volatile tier every
+  // turn. Loaded once — it's the same project for the whole suite.
+  const engagement = await getEngagement(DEFAULT_PROJECT);
+  const engagementBlock = engagement ? engagementDigest(engagement) : "";
 
   let passed = 0;
   const failedIds: string[] = [];
@@ -76,11 +82,12 @@ async function run() {
     const workingContext = buildWorkingContext({ projectId: DEFAULT_PROJECT, openFile: sc.openFile });
     const memories = await getMemoriesForContext(sc.user, DEFAULT_PROJECT);
     const assembled = assembleContext(memories, workingContext);
+    const volatileBlock = [engagementBlock, assembled.volatileBlock].filter(Boolean).join("\n\n");
     const { text, trace } = await respond([{ role: "user", content: sc.message }], {
       projectId: DEFAULT_PROJECT,
       user: sc.user,
       stableBlock: assembled.stableBlock,
-      volatileBlock: assembled.volatileBlock,
+      volatileBlock,
     });
 
     const fails: string[] = [];
