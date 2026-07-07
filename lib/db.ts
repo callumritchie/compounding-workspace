@@ -90,9 +90,12 @@ CREATE TABLE IF NOT EXISTS memories (
 CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope);
 CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status);
 
--- Vector index keyed by "scope::id" (vec0 needs a single-column key).
+-- Vector index keyed by "scope::id" (vec0 needs a single-column key). "scope" is
+-- a metadata column so relevance search can be filtered to in-scope memories
+-- inside the DB — the scope lattice stays the retrieval boundary.
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
   vid       TEXT PRIMARY KEY,
+  scope     TEXT,
   embedding float[${MEM_DIM}] distance_metric=cosine
 );
 

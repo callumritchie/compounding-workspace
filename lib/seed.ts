@@ -133,11 +133,11 @@ async function importMemories(mems: SeedMem[]): Promise<void> {
        (id,scope,type,importance,status,pinned,confidential,applies_to,provenance,body,use_count,used_since_provisional,last_used,last_reinforced,created)
      VALUES (@id,@scope,@type,@importance,@status,@pinned,@confidential,@applies_to,@provenance,@body,@use_count,@used_since_provisional,@last_used,@last_reinforced,@created)`
   );
-  const vecStmt = db.prepare("INSERT OR REPLACE INTO memories_vec (vid, embedding) VALUES (?, ?)");
+  const vecStmt = db.prepare("INSERT OR REPLACE INTO memories_vec (vid, scope, embedding) VALUES (?, ?, ?)");
   db.transaction(() => {
     mems.forEach((m, i) => {
       memStmt.run(m);
-      vecStmt.run(vid(m.scope, m.id), encodeVec(vectors[i]));
+      vecStmt.run(vid(m.scope, m.id), m.scope, encodeVec(vectors[i]));
     });
   })();
 }

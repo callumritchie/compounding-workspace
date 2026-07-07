@@ -23,7 +23,7 @@ import {
 import { runAgent, type AgentEvent } from "@/lib/agent";
 import { buildWorkingContext } from "@/lib/context";
 import { assembleContext, estimateTokens } from "@/lib/assemble";
-import { getMemoriesForContext, recordMemoryUse, graduateOnUse } from "@/lib/memory";
+import { getRelevantMemories, recordMemoryUse, graduateOnUse } from "@/lib/memory";
 import { getProjectConfig } from "@/lib/project";
 import { getAgent } from "@/lib/agents";
 import { TOOLS } from "@/lib/tools";
@@ -68,11 +68,11 @@ export async function POST(req: Request) {
   const agent = await getAgent(chatMeta?.agentId);
   const agentTools = agent.tools?.length ? TOOLS.filter((t) => agent.tools.includes(t.name)) : TOOLS;
 
-  // Assemble memory (labelled, split into cache-stable + query-ranked tiers).
-  // Passing the message lets the ranked tier prioritise memories relevant to THIS
-  // question when there are too many to fit (see assembleContext).
-  const memories = await getMemoriesForContext(user, project);
-  const assembled = await assembleContext(memories, workingContext, message);
+  // Retrieve the RELEVANT in-scope memories for this question (constitution +
+  // pinned always; learned by embedding relevance within the scope lattice), then
+  // assemble them into the cache-stable + volatile tiers.
+  const memories = await getRelevantMemories(user, project, message);
+  const assembled = assembleContext(memories, workingContext);
 
   // Break the input prompt into parts for the composition bar.
   const priorHistory = history.slice(0, -1).map((m) => m.content).join("\n");

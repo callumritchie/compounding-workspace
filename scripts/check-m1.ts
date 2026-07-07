@@ -20,7 +20,7 @@ async function main() {
     "We've learned the CFO (economic buyer) won't approve any recommendation without a downside/sensitivity " +
     "case — true of healthcare finance sponsors generally. Nominate this lesson for promotion to the sector.";
   const wc = buildWorkingContext({ projectId: project, openFile: null });
-  const asm = await assembleContext(await getMemoriesForContext(user, project), wc, msg);
+  const asm = assembleContext(await getMemoriesForContext(user, project), wc);
   const { trace } = await respond([{ role: "user", content: msg }], {
     projectId: project,
     user,

@@ -28,8 +28,6 @@
 --------------------------------------------------------------------------- */
 
 import type { Memory, MemoryType } from "./memory";
-import { embed, embedOne } from "./embed";
-import { cosine } from "./vectors";
 
 // Rough token estimate (~4 chars/token). Good enough for budgeting; the glass
 // box shows the REAL token counts from the API response for cost/caching.
@@ -38,7 +36,6 @@ export function estimateTokens(text: string): number {
 }
 
 const BUDGETS = { stable: 1500, ranked: 800 };
-const STABLE_IMPORTANCE = 0.7; // learned memory this important rides in the stable tier
 
 export type Tier = "stable" | "ranked";
 export type InjectedItem = { id: string; scope: string; type: MemoryType; tier: Tier; tokens: number; text: string };
@@ -99,52 +96,19 @@ function fitToBudget(
   return lines;
 }
 
-// Rough token estimate of the line a memory becomes, matching fitToBudget.
-function lineTokens(m: Memory): number {
-  return estimateTokens(`- ${label(m)}: ${m.body}`);
-}
-
-// Reorder the ranked-tier memories by relevance to the query — but only when it
-// matters (the tier overflows its budget) and only if we have a query and a
-// working embedder. Otherwise keep the importance order (byImportance already
-// applied), so small libraries behave exactly as before and the hot path stays
-// free of embedding calls.
-async function orderRankedByRelevance(
-  rankedMems: Memory[],
-  query: string | undefined,
-  budget: number
-): Promise<Memory[]> {
-  const totalTokens = rankedMems.reduce((s, m) => s + lineTokens(m), 0);
-  if (!query || rankedMems.length < 2 || totalTokens <= budget) return rankedMems;
-  try {
-    const [qvec, bodyVecs] = await Promise.all([embedOne(query), embed(rankedMems.map((m) => m.body))]);
-    const scored = rankedMems.map((m, i) => ({ m, rel: cosine(qvec, bodyVecs[i]) }));
-    // Relevance first; importance breaks ties so equally-relevant items keep a
-    // sensible order.
-    scored.sort((a, b) => (b.rel - a.rel) || (b.m.importance - a.m.importance));
-    return scored.map((s) => s.m);
-  } catch {
-    return rankedMems; // embedder/index unavailable → importance order stands
-  }
-}
-
-export async function assembleContext(
-  memories: Memory[],
-  workingContext: string,
-  query?: string
-): Promise<AssembledContext> {
-  // Provisional memory always rides in the ranked (non-cached, "verify before
-  // relying") tier, regardless of importance — it isn't trusted enough to cache.
-  const isStable = (m: Memory) =>
-    m.status !== "provisional" && (m.type === "constitution" || m.importance >= STABLE_IMPORTANCE);
+export function assembleContext(memories: Memory[], workingContext: string): AssembledContext {
+  // CACHE-STABLE tier = constitution + PINNED memory only. Both are things that
+  // don't change turn-to-turn, so the cached prompt prefix stays stable (P4). We
+  // deliberately no longer put "high-importance learned" here: importance is
+  // mutable (graduation, edits, decay), so gating the cache on it silently busted
+  // the prefix cache. Provisional memory is never cached (unconfirmed).
+  const isStable = (m: Memory) => m.status !== "provisional" && (m.type === "constitution" || !!m.pinned);
   const byImportance = (a: Memory, b: Memory) => b.importance - a.importance;
 
+  // The `memories` passed in are already the RELEVANT subset (see
+  // getRelevantMemories); here we just tier, label, and fit to budget.
   const stableMems = memories.filter(isStable).sort(byImportance);
-  const rankedMems = await orderRankedByRelevance(
-    memories.filter((m) => !isStable(m)).sort(byImportance),
-    query,
-    BUDGETS.ranked
-  );
+  const rankedMems = memories.filter((m) => !isStable(m)).sort(byImportance);
 
   const injected: InjectedItem[] = [];
   const dropped: DroppedItem[] = [];

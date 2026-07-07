@@ -69,7 +69,7 @@ async function run() {
   for (const sc of scenarios.slice(0, limit)) {
     const workingContext = buildWorkingContext({ projectId: DEFAULT_PROJECT, openFile: sc.openFile });
     const memories = await getMemoriesForContext(sc.user, DEFAULT_PROJECT);
-    const assembled = await assembleContext(memories, workingContext, sc.message);
+    const assembled = assembleContext(memories, workingContext);
     const { text, trace } = await respond([{ role: "user", content: sc.message }], {
       projectId: DEFAULT_PROJECT,
       user: sc.user,

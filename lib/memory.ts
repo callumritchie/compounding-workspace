@@ -129,6 +129,63 @@ export async function getMemoriesForContext(user: string, projectId: string): Pr
   return rows.map(rowToMemory).filter((m) => matchesContext(m, tags));
 }
 
+// Relevance-selected memories for a turn (P5: memory retrieved like the corpus).
+// The scope lattice stays the ACCESS boundary — we never retrieve across it — but
+// WITHIN scope we pull the RELEVANT few rather than pushing everything:
+//   • constitution + pinned  → always included (policy / deliberately always-on)
+//   • learned                → top-K by embedding similarity to the question,
+//                              scored per scope (a per-scope cap) via memories_vec.
+// This is what makes memory hold up with lots and lots of memories. With no query
+// (or no embedder) it falls back to importance order.
+export async function getRelevantMemories(
+  user: string,
+  projectId: string,
+  query: string,
+  opts?: { perScope?: number }
+): Promise<Memory[]> {
+  await ensureSeeded();
+  const cfg = await getProjectConfig(projectId);
+  const tags = contextTags(cfg);
+  const scopes = scopesFor(user, cfg);
+  const perScope = opts?.perScope ?? 5;
+  const db = getDb();
+
+  // Everything in-scope + applicable (the candidate set), split by whether it's
+  // always-in (constitution/pinned) or relevance-ranked (learned).
+  const placeholders = scopes.map(() => "?").join(",");
+  const rows = db
+    .prepare(`SELECT * FROM memories WHERE status != 'retracted' AND scope IN (${placeholders})`)
+    .all(...scopes) as Row[];
+  const applicable = rows.map(rowToMemory).filter((m) => matchesContext(m, tags));
+  const always = applicable.filter((m) => m.type === "constitution" || m.pinned);
+  const learned = applicable.filter((m) => !(m.type === "constitution" || m.pinned));
+  if (learned.length === 0 || !query.trim()) {
+    return [...always, ...learned.sort((a, b) => b.importance - a.importance)];
+  }
+
+  // Rank the learned candidates by relevance to the question. Per-scope KNN keeps
+  // the lattice boundary in the DB and gives a natural per-scope cap.
+  let qvec: number[];
+  try {
+    qvec = await embedOne(query);
+  } catch {
+    return [...always, ...learned.sort((a, b) => b.importance - a.importance)];
+  }
+  const q = JSON.stringify(qvec);
+  const dist = new Map<string, number>(); // vid -> distance
+  const knn = db.prepare(
+    "SELECT vid, distance FROM memories_vec WHERE embedding MATCH ? AND k = ? AND scope = ? ORDER BY distance"
+  );
+  for (const scope of new Set(learned.map((m) => m.scope))) {
+    const hits = knn.all(q, perScope, scope) as { vid: string; distance: number }[];
+    for (const h of hits) dist.set(h.vid, h.distance);
+  }
+  const ranked = learned
+    .filter((m) => dist.has(vid(m.scope, m.id)))
+    .sort((a, b) => (dist.get(vid(a.scope, a.id))! - dist.get(vid(b.scope, b.id))!));
+  return [...always, ...ranked];
+}
+
 // Create a memory. New learned memories are born at low importance (they must earn
 // trust). A memory can be born "provisional" (still injected, flagged unconfirmed
 // until it earns trust through use — see graduateOnUse).
@@ -168,7 +225,7 @@ export async function writeMemory(input: {
       usp: input.status === "provisional" ? 0 : 0,
       created,
     });
-    db.prepare("INSERT OR REPLACE INTO memories_vec (vid, embedding) VALUES (?, ?)").run(vid(input.scope, id), encodeVec(vec));
+    db.prepare("INSERT OR REPLACE INTO memories_vec (vid, scope, embedding) VALUES (?, ?, ?)").run(vid(input.scope, id), input.scope, encodeVec(vec));
     audit(db, { actor: String(provenance.origin_user ?? "agent"), action: "create", scope: input.scope, memoryId: id, detail: { body: input.body, status: input.status ?? "active" } });
   })();
 
@@ -226,7 +283,7 @@ export async function updateMemory(
   const db = getDb();
   db.transaction(() => {
     db.prepare(`UPDATE memories SET ${sets.join(", ")} WHERE scope = @scope AND id = @id`).run(params);
-    if (newVec) db.prepare("INSERT OR REPLACE INTO memories_vec (vid, embedding) VALUES (?, ?)").run(vid(scope, id), encodeVec(newVec));
+    if (newVec) db.prepare("INSERT OR REPLACE INTO memories_vec (vid, scope, embedding) VALUES (?, ?, ?)").run(vid(scope, id), scope, encodeVec(newVec));
     audit(db, { actor: patch.actor, action: "update", scope, memoryId: id, detail: { patch, from: { importance: before.importance, status: before.status } } });
   })();
   return true;
