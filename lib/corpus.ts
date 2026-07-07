@@ -12,6 +12,7 @@
 
 import { promises as fs } from "fs";
 import path from "path";
+import { writeFileSafe } from "./fsatomic";
 
 // For Phase 1 we have a single demo project. (Multi-project comes later.)
 export const DEFAULT_PROJECT = "acme-health";
@@ -87,8 +88,7 @@ export async function writeFile(
   content: string
 ): Promise<void> {
   const target = safeResolve(projectId, relPath);
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(target, content, "utf8");
+  await writeFileSafe(target, content); // atomic + serialised per path
 }
 
 // A single search hit: which file, which line, and the line's text.

@@ -14,12 +14,21 @@
    authoritative, so it's never proposed for archiving.
 --------------------------------------------------------------------------- */
 
-import { listAllMemories } from "./memory";
+import { listAllMemories, updateMemory } from "./memory";
 import { embed } from "./embed";
 import { cosine } from "./vectors";
 
 const STALE_DAYS = 30;
 const DUP_THRESHOLD = 0.85;
+
+// Decay: how the "usage ≠ correctness" rule stays honest over time. Importance
+// rises only on CONFIRMATION (approval/promotion). Left alone, a learned memory
+// that isn't used or reconfirmed slowly loses importance and is eventually
+// archived — so a wrong-but-in-scope fact can't drift upward and linger forever.
+const DECAY_DAYS = 45; // untouched this long → decay a step
+const DECAY_STEP = 0.08; // importance lost per decay pass
+const DECAY_FLOOR = 0.1; // don't decay below this
+const ARCHIVE_BELOW = 0.12; // decayed this low → auto-archive (reversible)
 
 export type StaleItem = {
   scope: string;
@@ -31,6 +40,38 @@ export type StaleItem = {
 };
 type DupRef = { scope: string; id: string; body: string };
 export type DupPair = { a: DupRef; b: DupRef; score: number };
+
+function daysSinceActivity(m: { lastUsed?: string; lastReinforced?: string; created?: string }): number | null {
+  const times = [m.lastUsed, m.lastReinforced, m.created]
+    .filter(Boolean)
+    .map((d) => Date.parse(d as string))
+    .filter((n) => !Number.isNaN(n));
+  if (times.length === 0) return null;
+  return (Date.now() - Math.max(...times)) / 86_400_000;
+}
+
+// Decay untouched learned memory a step; archive anything that falls too low.
+// Only LEARNED, active, NON-pinned memory decays: constitution is authoritative,
+// pinned is deliberately kept. Returns what changed (for the maintain report).
+export async function decayMemories(): Promise<{ decayed: number; archived: number }> {
+  const all = await listAllMemories();
+  let decayed = 0;
+  let archived = 0;
+  for (const m of all) {
+    if (m.type !== "learned" || (m.status ?? "active") !== "active" || m.pinned) continue;
+    const days = daysSinceActivity(m);
+    if (days === null || days <= DECAY_DAYS) continue;
+    const next = Math.max(DECAY_FLOOR, Number((m.importance - DECAY_STEP).toFixed(3)));
+    if (next < ARCHIVE_BELOW) {
+      await updateMemory(m.scope, m.id, { status: "retracted", actor: "decay" });
+      archived++;
+    } else if (next < m.importance) {
+      await updateMemory(m.scope, m.id, { importance: next, actor: "decay" });
+      decayed++;
+    }
+  }
+  return { decayed, archived };
+}
 
 export async function computeLifecycle(): Promise<{ stale: StaleItem[]; duplicates: DupPair[] }> {
   const all = await listAllMemories();

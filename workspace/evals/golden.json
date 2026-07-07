@@ -54,5 +54,59 @@
     "expect": {
       "answerIncludesAny": ["CFO", "finance"]
     }
+  },
+  {
+    "id": "rag-market-size",
+    "description": "RAG: pulls a specific figure buried deep in the uploaded market report",
+    "user": "callum",
+    "message": "According to the uploaded digital-health market outlook, what is the projected 2029 US addressable spend?",
+    "expect": {
+      "answerIncludesAny": ["52", "$52"]
+    }
+  },
+  {
+    "id": "rag-binding-constraint",
+    "description": "RAG: retrieves the report's thesis on the binding constraint to scaling",
+    "user": "callum",
+    "message": "The market outlook says the gap between a working product and a scaled program is one kind of problem, not a technical one. What is it?",
+    "expect": {
+      "answerIncludesAny": ["operational", "staffing", "workflow"]
+    }
+  },
+  {
+    "id": "rag-reimbursement-thesis",
+    "description": "RAG: surfaces the report's central claim about what drives viability",
+    "user": "callum",
+    "message": "Per the market report, what is the single largest determinant of a digital-health program's viability?",
+    "expect": {
+      "answerIncludesAny": ["reimbursement", "billable", "billing", "code"]
+    }
+  },
+  {
+    "id": "rag-convenience-wedge",
+    "description": "RAG: retrieves a distinctive framing (convenience as a wedge, not a moat)",
+    "user": "callum",
+    "message": "Does the market outlook treat convenience as a durable source of margin? Answer in one line.",
+    "expect": {
+      "answerIncludesAny": ["wedge", "moat", "erode", "fragile", "not"]
+    }
+  },
+  {
+    "id": "rag-rpm-ccm-pairing",
+    "description": "RAG: recovers the specific pairing the report calls strategically interesting",
+    "user": "callum",
+    "message": "Which two program types does the market report say work materially better when run together?",
+    "expect": {
+      "answerIncludesAll": ["RPM", "CCM"]
+    }
+  },
+  {
+    "id": "rag-synthesis-with-memory",
+    "description": "RAG + memory: uses the report's risks AND the healthcare downside-first lesson to caution an eager COO",
+    "user": "bob",
+    "message": "Our COO wants to pilot fast. Using the market report's main risks, what is the single strongest caution I should put in front of the CFO?",
+    "expect": {
+      "answerIncludesAny": ["reimbursement", "cost-to-serve", "cost to serve", "staffing", "downside", "stress"]
+    }
   }
 ]

@@ -23,8 +23,12 @@ import { getMemoriesForContext } from "./memory";
 import { readFile, listFiles } from "./corpus";
 import { getProjectConfig } from "./project";
 
-// The reasoning engine. `claude-opus-4-8` is Anthropic's most capable Opus model.
+// The reasoning engine. `claude-opus-4-8` is Anthropic's most capable Opus model,
+// used for the main agent loop. FAST_MODEL (Haiku) handles the cheap auxiliary
+// calls — reranking, classification, the compass/kickoff generators — where the
+// full model isn't needed. Tiering these is a big latency/cost win (see Phase E).
 const MODEL = "claude-opus-4-8";
+const FAST_MODEL = "claude-haiku-4-5";
 
 // Stable persona + how to use the tools. Kept stable so it can be cached later.
 // Exported so the chat route can estimate its token weight for the composition bar.
@@ -208,10 +212,43 @@ export async function respond(
   return runAgent(messages, opts);
 }
 
+// Confidentiality leak check at promotion time. The substring check (leakCheck in
+// promotion.ts) catches literal client names; this LLM pass catches what substring
+// can't — paraphrased names, and STRUCTURAL identifiers (a distinctive metric,
+// a one-of-a-kind strategy) that could still fingerprint the client. Returns a
+// verdict + short reasons. Fails "open but flagged" on error so a model hiccup
+// never silently green-lights a leak.
+export async function leakCheckLLM(text: string, clientName: string): Promise<{ flagged: boolean; reasons: string[] }> {
+  try {
+    const response = await client.messages.create({
+      model: FAST_MODEL,
+      max_tokens: 200,
+      system:
+        "You are a confidentiality reviewer for a consultancy's SHARED knowledge base. A lesson is about to be promoted " +
+        "to a scope other consultants can see. Flag it if anything could identify the originating client — the client " +
+        "name (even paraphrased), or a STRUCTURAL identifier like a distinctive metric, deal size, named person, or a " +
+        "one-of-a-kind strategy. General, transferable insight is fine. Return STRICT JSON: " +
+        `{"flagged": boolean, "reasons": string[]}. reasons = short phrases naming what could identify the client (empty if clean). JSON only.`,
+      messages: [{ role: "user", content: `Originating client: ${clientName}\n\nLesson to promote:\n${text}\n\nJSON:` }],
+    });
+    const parsed = parseJsonObject<{ flagged: boolean; reasons: string[] }>(textOf(response), { flagged: false, reasons: [] });
+    return {
+      flagged: !!parsed.flagged,
+      reasons: Array.isArray(parsed.reasons) ? parsed.reasons.filter((r) => typeof r === "string").slice(0, 5) : [],
+    };
+  } catch {
+    // Fail "flagged" so a model hiccup never silently green-lights a leak.
+    return { flagged: true, reasons: ["leak-check unavailable — review manually before promoting"] };
+  }
+}
+
 // Abstraction step used at promotion time: turn a project-specific lesson into a
 // general, reusable one — stripping client names and identifying specifics.
 export async function abstractLesson(fact: string, clientName: string, scopeLabel: string): Promise<string> {
   const response = await client.messages.create({
+    // Opus: abstraction is confidentiality-sensitive (it must reliably strip
+    // identifying detail while preserving the transferable insight) — worth the
+    // stronger model even though it's an auxiliary call.
     model: MODEL,
     max_tokens: 300,
     system:
@@ -296,7 +333,7 @@ export async function draftKickoff(projectId: string, user: string, opts?: { ref
   }
 
   const response = await client.messages.create({
-    model: MODEL,
+    model: FAST_MODEL,
     max_tokens: 600,
     system:
       "You brief a consultant starting a project, using ONLY the inherited team memory and kick-off brief provided. " +
@@ -335,7 +372,7 @@ export async function suggestFromFile(projectId: string, filePath: string): Prom
   if (!content.trim()) return { questions: [], gaps: [] };
 
   const response = await client.messages.create({
-    model: MODEL,
+    model: FAST_MODEL,
     max_tokens: 400,
     system:
       "A consultant just added a document to a project. Using ONLY its content, return STRICT JSON: " +
@@ -357,7 +394,7 @@ export async function suggestFromFile(projectId: string, filePath: string): Prom
 export async function intakeQuestions(projectId: string): Promise<string[]> {
   const cfg = await getProjectConfig(projectId);
   const response = await client.messages.create({
-    model: MODEL,
+    model: FAST_MODEL,
     max_tokens: 250,
     system:
       "You are kicking off a new consulting project. Propose exactly 3 short intake questions whose answers " +
@@ -376,7 +413,7 @@ export async function distillFacts(projectId: string, answers: { question: strin
   const filled = answers.filter((a) => a.answer.trim());
   if (filled.length === 0) return [];
   const response = await client.messages.create({
-    model: MODEL,
+    model: FAST_MODEL,
     max_tokens: 400,
     system:
       "Turn each answered kickoff question into ONE durable, self-contained fact about the project, phrased so it " +
@@ -439,7 +476,7 @@ export async function inferNextActions(projectId: string, user: string, recent: 
   }
 
   const response = await client.messages.create({
-    model: MODEL,
+    model: FAST_MODEL,
     max_tokens: 1500, // room for stage + 3-4 full-sentence actions + an offer, so the JSON never truncates
     system:
       "You guide a consultant through a client engagement by inferring, from the real state below, WHERE the " +

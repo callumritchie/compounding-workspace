@@ -17,6 +17,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { DEFAULT_PROJECT } from "./corpus";
+import { writeFileSafe, updateFileSafe } from "./fsatomic";
 
 // Per-assistant-message "X-ray": everything that produced the answer, stored
 // with the message so it can be inspected later (persists across reloads).
@@ -73,9 +74,18 @@ async function readIndex(user: User): Promise<ChatMeta[]> {
     return [];
   }
 }
-async function writeIndex(user: User, list: ChatMeta[]): Promise<void> {
-  await fs.mkdir(chatsDir(user), { recursive: true });
-  await fs.writeFile(indexPath(user), JSON.stringify(list, null, 2), "utf8");
+// Read-modify-write the tab index under a per-file lock so two concurrent tab
+// operations (e.g. a user's two tabs) can't clobber each other's update.
+function mutateIndex(user: User, mutate: (list: ChatMeta[]) => ChatMeta[]): Promise<void> {
+  return updateFileSafe(indexPath(user), (current) => {
+    let list: ChatMeta[] = [];
+    try {
+      list = current ? (JSON.parse(current) as ChatMeta[]) : [];
+    } catch {
+      list = [];
+    }
+    return JSON.stringify(mutate(list), null, 2);
+  });
 }
 
 // The full tab list (all projects). The chat route + project filtering use this.
@@ -92,10 +102,8 @@ export async function listChatsForProject(user: User, projectId: string): Promis
 export async function createChat(user: User, projectId: string, title = "New chat"): Promise<ChatMeta> {
   const chatId = `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
   const meta: ChatMeta = { chatId, title, updated: new Date().toISOString(), projectId };
-  const list = await readIndex(user);
-  list.push(meta);
-  await writeIndex(user, list);
-  await fs.writeFile(chatPath(user, chatId), "[]", "utf8");
+  await mutateIndex(user, (list) => [...list, meta]);
+  await writeFileSafe(chatPath(user, chatId), "[]");
   return meta;
 }
 
@@ -108,19 +116,19 @@ export async function getChatHistory(user: User, chatId: string): Promise<Messag
   }
 }
 
-// Save one tab's messages back to disk.
+// Save one tab's messages back to disk (atomic — no torn reads mid-write).
 export async function saveChatHistory(user: User, chatId: string, messages: Message[]): Promise<void> {
-  await fs.mkdir(chatsDir(user), { recursive: true });
-  await fs.writeFile(chatPath(user, chatId), JSON.stringify(messages, null, 2), "utf8");
+  await writeFileSafe(chatPath(user, chatId), JSON.stringify(messages, null, 2));
 }
 
 // Patch a tab's metadata (title, last message, open file, updated time).
 export async function updateChatMeta(user: User, chatId: string, patch: Partial<ChatMeta>): Promise<void> {
-  const list = await readIndex(user);
-  const i = list.findIndex((c) => c.chatId === chatId);
-  if (i === -1) return;
-  list[i] = { ...list[i], ...patch };
-  await writeIndex(user, list);
+  await mutateIndex(user, (list) => {
+    const i = list.findIndex((c) => c.chatId === chatId);
+    if (i === -1) return list;
+    list[i] = { ...list[i], ...patch };
+    return list;
+  });
 }
 
 // Empty a tab's messages but keep the tab.
@@ -130,8 +138,7 @@ export async function clearChat(user: User, chatId: string): Promise<void> {
 
 // Remove a tab entirely.
 export async function deleteChat(user: User, chatId: string): Promise<void> {
-  const list = (await readIndex(user)).filter((c) => c.chatId !== chatId);
-  await writeIndex(user, list);
+  await mutateIndex(user, (list) => list.filter((c) => c.chatId !== chatId));
   try {
     await fs.unlink(chatPath(user, chatId));
   } catch {

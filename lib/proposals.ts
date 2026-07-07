@@ -1,34 +1,40 @@
 /* ---------------------------------------------------------------------------
-   proposals.ts — SUGGESTED memories awaiting the user's approval.
+   proposals.ts — SUGGESTED memories awaiting the user's approval (DB table).
 
    The contrast with the promotion queue (lib/promotion.ts):
      • promotion  = take an EXISTING project memory and share it more broadly.
-     • proposal   = a NEW memory the agent wants to save to the shared project
-                    scope, held here until the user approves it.
+     • proposal   = a NEW memory the agent wants to save to a shared scope, held
+                    here until a human approves it.
 
    Personal memories still save immediately (only the user sees them). Anything
-   that would be shared with the team goes through here first — consent before
-   the shared brain changes. Files live in workspace/memory/_proposals/ (the
-   leading "_" keeps them out of the memory library + scope reads).
+   shared with the team goes through here first — consent before the shared brain
+   changes. Moved off loose JSON files onto a transactional table.
 --------------------------------------------------------------------------- */
 
-import { promises as fs } from "fs";
-import path from "path";
+import { getDb, audit } from "./db";
+import { ensureSeeded } from "./seed";
 import { writeMemory } from "./memory";
-
-const DIR = path.join(process.cwd(), "workspace", "memory", "_proposals");
 
 export type Proposal = {
   id: string;
   fact: string;
-  scope: string; // where it would be saved, e.g. project/acme-health
+  scope: string;
   proposedBy: string;
   sourceProject: string;
   created: string;
 };
 
-async function ensure(): Promise<void> {
-  await fs.mkdir(DIR, { recursive: true });
+type Row = { id: string; fact: string | null; scope: string | null; proposed_by: string | null; source_project: string | null; created: string | null };
+
+function rowToProposal(r: Row): Proposal {
+  return {
+    id: r.id,
+    fact: r.fact ?? "",
+    scope: r.scope ?? "",
+    proposedBy: r.proposed_by ?? "",
+    sourceProject: r.source_project ?? "",
+    created: r.created ?? "",
+  };
 }
 
 export async function addProposal(input: {
@@ -37,37 +43,38 @@ export async function addProposal(input: {
   proposedBy: string;
   sourceProject: string;
 }): Promise<Proposal> {
-  await ensure();
+  await ensureSeeded();
   const id = `prop_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
-  const p: Proposal = { id, created: new Date().toISOString(), ...input };
-  await fs.writeFile(path.join(DIR, `${id}.json`), JSON.stringify(p, null, 2), "utf8");
-  return p;
+  const created = new Date().toISOString();
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare("INSERT INTO proposals (id,fact,scope,proposed_by,source_project,created) VALUES (?,?,?,?,?,?)").run(
+      id,
+      input.fact,
+      input.scope,
+      input.proposedBy,
+      input.sourceProject,
+      created
+    );
+    audit(db, { actor: input.proposedBy, action: "propose", scope: input.scope, detail: { fact: input.fact } });
+  })();
+  return { id, ...input, created };
 }
 
 export async function listProposals(): Promise<Proposal[]> {
-  try {
-    const names = await fs.readdir(DIR);
-    const out: Proposal[] = [];
-    for (const n of names) {
-      if (n.endsWith(".json")) out.push(JSON.parse(await fs.readFile(path.join(DIR, n), "utf8")) as Proposal);
-    }
-    return out.sort((a, b) => a.created.localeCompare(b.created));
-  } catch {
-    return [];
-  }
+  await ensureSeeded();
+  const rows = getDb().prepare("SELECT * FROM proposals ORDER BY created").all() as Row[];
+  return rows.map(rowToProposal);
 }
 
 export async function getProposal(id: string): Promise<Proposal | null> {
-  try {
-    return JSON.parse(await fs.readFile(path.join(DIR, `${path.basename(id)}.json`), "utf8")) as Proposal;
-  } catch {
-    return null;
-  }
+  const r = getDb().prepare("SELECT * FROM proposals WHERE id = ?").get(id) as Row | undefined;
+  return r ? rowToProposal(r) : null;
 }
 
-// Approve → actually write the memory (born a touch above cold-start, since a
-// human confirmed it), then remove the proposal.
-export async function approveProposal(id: string, finalText?: string): Promise<boolean> {
+// Approve → write the memory (born a touch above cold-start, since a human
+// confirmed it), then remove the proposal.
+export async function approveProposal(id: string, finalText?: string, actor?: string): Promise<boolean> {
   const p = await getProposal(id);
   if (!p) return false;
   await writeMemory({
@@ -78,19 +85,24 @@ export async function approveProposal(id: string, finalText?: string): Promise<b
     provenance: {
       origin_user: p.proposedBy,
       origin_project: p.sourceProject,
-      approved_by_user: true,
+      approved_by_user: actor ?? true,
       created: new Date().toISOString().slice(0, 10),
     },
   });
-  await fs.unlink(path.join(DIR, `${path.basename(id)}.json`)).catch(() => {});
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare("DELETE FROM proposals WHERE id = ?").run(id);
+    audit(db, { actor, action: "approve-proposal", scope: p.scope, detail: { fact: finalText ?? p.fact } });
+  })();
   return true;
 }
 
-export async function dismissProposal(id: string): Promise<boolean> {
-  try {
-    await fs.unlink(path.join(DIR, `${path.basename(id)}.json`));
-    return true;
-  } catch {
-    return false;
-  }
+export async function dismissProposal(id: string, actor?: string): Promise<boolean> {
+  const db = getDb();
+  const changes = db.transaction(() => {
+    const r = db.prepare("DELETE FROM proposals WHERE id = ?").run(id);
+    if (r.changes) audit(db, { actor, action: "dismiss-proposal", detail: { id } });
+    return r.changes;
+  })();
+  return changes > 0;
 }

@@ -3,95 +3,95 @@
 
    The contrast with corpus.ts is the whole point of this project:
      • corpus  = large raw files, PULLED in on demand (RAG)
-     • memory  = small distilled facts, PUSHED into every prompt
+     • memory  = small distilled facts, SELECTED and injected into the prompt
 
-   Each memory is a markdown file with a YAML frontmatter header, grouped into
-   SCOPE folders under workspace/memory/. You can open any of them in a text
-   editor — this is the system's "brain", in plain sight.
-
-     scope examples:  company/policy   company/lessons
-                      project/acme-health
-                      personal/callum   personal/bob
+   Memory now lives in a SQLite database (lib/db.ts) rather than one file per
+   memory. Why: this is a multi-player shared brain — concurrent writes to loose
+   files tore or lost updates; the database gives real transactions. Each memory
+   also carries an embedding (memories_vec) so the RELEVANT few can be retrieved
+   for a question instead of pushing every in-scope memory. The git-tracked
+   markdown under workspace/memory/** stays as the SEED source (see lib/seed.ts);
+   the human window onto the live store is the Memory-manager UI.
 
    Two TYPES cut across every scope:
      • constitution — authored, authoritative, doesn't decay (policies, prefs)
      • learned      — emergent, compounding, provenance-tracked (lessons)
 --------------------------------------------------------------------------- */
 
-import { promises as fs } from "fs";
-import path from "path";
-import matter from "gray-matter";
+import { getDb, encodeVec, vid, audit } from "./db";
+import { ensureSeeded } from "./seed";
+import { embed, embedOne } from "./embed";
 import { getProjectConfig, contextTags, type ProjectConfig } from "./project";
 
 export type MemoryType = "constitution" | "learned";
 
 export type Memory = {
   id: string;
-  scope: string; // folder path, e.g. "company/policy"
+  scope: string; // lattice path, e.g. "company/policy"
   type: MemoryType;
-  importance: number; // 0..1 (cold-start low; climbs via confirmation/promotion)
+  importance: number; // 0..1 (cold-start low; up via confirmation, down via decay)
   confidential?: boolean;
+  pinned?: boolean; // deliberately kept in the always-on cached tier (see assemble.ts)
   appliesTo?: Record<string, string>;
   provenance?: Record<string, unknown>;
-  status?: string; // active | proposed | retracted
-  useCount?: number; // how many turns this memory has actually been injected into
-  lastUsed?: string; // YYYY-MM-DD of the last turn it was injected
-  lastReinforced?: string; // YYYY-MM-DD of the last 👍/👎 that moved it
-  created?: string; // YYYY-MM-DD it was first written (from provenance)
+  status?: string; // active | provisional | retracted
+  useCount?: number;
+  lastUsed?: string;
+  lastReinforced?: string;
+  created?: string;
   body: string;
-  file: string;
+  file: string; // synthetic "scope/id" label (kept for backwards compatibility)
 };
 
-// Pull the lifecycle fields (usage + dates) out of a parsed frontmatter block.
-function lifecycleFields(data: Record<string, unknown>): Pick<Memory, "useCount" | "lastUsed" | "lastReinforced" | "created"> {
-  const prov = (data.provenance ?? {}) as Record<string, unknown>;
+type Row = {
+  scope: string;
+  id: string;
+  type: string;
+  importance: number;
+  status: string;
+  pinned: number;
+  confidential: number;
+  applies_to: string | null;
+  provenance: string | null;
+  body: string;
+  use_count: number;
+  used_since_provisional: number;
+  last_used: string | null;
+  last_reinforced: string | null;
+  created: string | null;
+};
+
+function rowToMemory(r: Row): Memory {
   return {
-    useCount: typeof data.use_count === "number" ? data.use_count : 0,
-    lastUsed: data.last_used ? String(data.last_used) : undefined,
-    lastReinforced: data.last_reinforced ? String(data.last_reinforced) : undefined,
-    created: prov.created ? String(prov.created) : undefined,
+    id: r.id,
+    scope: r.scope,
+    type: r.type === "learned" ? "learned" : "constitution",
+    importance: typeof r.importance === "number" ? r.importance : 0.3,
+    confidential: !!r.confidential,
+    pinned: !!r.pinned,
+    appliesTo: r.applies_to ? (JSON.parse(r.applies_to) as Record<string, string>) : undefined,
+    provenance: r.provenance ? (JSON.parse(r.provenance) as Record<string, unknown>) : undefined,
+    status: r.status,
+    useCount: r.use_count,
+    lastUsed: r.last_used ?? undefined,
+    lastReinforced: r.last_reinforced ?? undefined,
+    created: r.created ?? undefined,
+    body: r.body,
+    file: `${r.scope}/${r.id}`,
   };
 }
 
-const MEM_ROOT = path.join(process.cwd(), "workspace", "memory");
-
-// Read + parse every memory in one scope folder ([] if the folder is empty).
+// Read every active (non-retracted) memory in one scope.
 export async function readMemoriesInScope(scope: string): Promise<Memory[]> {
-  const dir = path.join(MEM_ROOT, scope);
-  let names: string[];
-  try {
-    names = await fs.readdir(dir);
-  } catch {
-    return [];
-  }
-  const out: Memory[] = [];
-  for (const name of names) {
-    if (!name.endsWith(".md")) continue;
-    const raw = await fs.readFile(path.join(dir, name), "utf8");
-    const { data, content } = matter(raw);
-    if (data.status === "retracted") continue; // contested/removed — never inject
-    out.push({
-      id: String(data.id ?? name.replace(/\.md$/, "")),
-      scope,
-      type: data.type === "learned" ? "learned" : "constitution",
-      importance: typeof data.importance === "number" ? data.importance : 0.3,
-      confidential: Boolean(data.confidential),
-      appliesTo: data.applies_to,
-      provenance: data.provenance,
-      status: data.status ? String(data.status) : "active",
-      ...lifecycleFields(data),
-      body: content.trim(),
-      file: path.join(dir, name),
-    });
-  }
-  return out;
+  await ensureSeeded();
+  const rows = getDb()
+    .prepare("SELECT * FROM memories WHERE scope = ? AND status != 'retracted'")
+    .all(scope) as Row[];
+  return rows.map(rowToMemory);
 }
 
 // The scopes that apply to a user on a project, broad → specific. This is the
 // scope LATTICE: company → sector → client → stakeholder → project → personal.
-// A memory promoted to "sector/healthcare" is seen by every healthcare project;
-// a "stakeholder/<id>" memory follows that PERSON onto any project they're on
-// (even a different client) — which is why it sits above project.
 export function scopesFor(user: string, cfg: ProjectConfig): string[] {
   return [
     "company/policy",
@@ -106,8 +106,6 @@ export function scopesFor(user: string, cfg: ProjectConfig): string[] {
 
 // A memory can carry an applies_to filter (e.g. {sector: healthcare}). It only
 // applies when EVERY tag matches the current context. No filter = always applies.
-// This is how one person's preferences can differ by project/client type without
-// inventing new scopes.
 export function matchesContext(mem: Memory, tags: Record<string, string>): boolean {
   if (!mem.appliesTo) return true;
   return Object.entries(mem.appliesTo).every(
@@ -115,221 +113,276 @@ export function matchesContext(mem: Memory, tags: Record<string, string>): boole
   );
 }
 
-// All in-scope, applicable memories for the current context.
+// All in-scope, applicable memories for the current context. `query` is accepted
+// for relevance-ranked retrieval (see getRelevantMemories in retrieval.ts); this
+// base function returns the full applicable set (used where everything is wanted,
+// e.g. the kickoff brief).
 export async function getMemoriesForContext(user: string, projectId: string): Promise<Memory[]> {
+  await ensureSeeded();
   const cfg = await getProjectConfig(projectId);
   const tags = contextTags(cfg);
-  const groups = await Promise.all(scopesFor(user, cfg).map(readMemoriesInScope));
-  return groups.flat().filter((m) => matchesContext(m, tags));
+  const scopes = scopesFor(user, cfg);
+  const placeholders = scopes.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(`SELECT * FROM memories WHERE status != 'retracted' AND scope IN (${placeholders})`)
+    .all(...scopes) as Row[];
+  return rows.map(rowToMemory).filter((m) => matchesContext(m, tags));
 }
 
-// Create/append a memory file. Used by the agent's "remember" tool. New learned
-// memories are born at low importance (they must earn trust). A memory can be
-// born "provisional" (status): still injected, but flagged unconfirmed until it
-// earns trust through use (see graduateOnUse) — this is how kickoff captures
-// facts without demanding the user approve each one.
+// Relevance-selected memories for a turn (P5: memory retrieved like the corpus).
+// The scope lattice stays the ACCESS boundary — we never retrieve across it — but
+// WITHIN scope we pull the RELEVANT few rather than pushing everything:
+//   • constitution + pinned  → always included (policy / deliberately always-on)
+//   • learned                → top-K by embedding similarity to the question,
+//                              scored per scope (a per-scope cap) via memories_vec.
+// This is what makes memory hold up with lots and lots of memories. With no query
+// (or no embedder) it falls back to importance order.
+export async function getRelevantMemories(
+  user: string,
+  projectId: string,
+  query: string,
+  opts?: { perScope?: number }
+): Promise<Memory[]> {
+  await ensureSeeded();
+  const cfg = await getProjectConfig(projectId);
+  const tags = contextTags(cfg);
+  const scopes = scopesFor(user, cfg);
+  const perScope = opts?.perScope ?? 5;
+  const db = getDb();
+
+  // Everything in-scope + applicable (the candidate set), split by whether it's
+  // always-in (constitution/pinned) or relevance-ranked (learned).
+  const placeholders = scopes.map(() => "?").join(",");
+  const rows = db
+    .prepare(`SELECT * FROM memories WHERE status != 'retracted' AND scope IN (${placeholders})`)
+    .all(...scopes) as Row[];
+  const applicable = rows.map(rowToMemory).filter((m) => matchesContext(m, tags));
+  const always = applicable.filter((m) => m.type === "constitution" || m.pinned);
+  const learned = applicable.filter((m) => !(m.type === "constitution" || m.pinned));
+  if (learned.length === 0 || !query.trim()) {
+    return [...always, ...learned.sort((a, b) => b.importance - a.importance)];
+  }
+
+  // Rank the learned candidates by relevance to the question. Per-scope KNN keeps
+  // the lattice boundary in the DB and gives a natural per-scope cap.
+  let qvec: number[];
+  try {
+    qvec = await embedOne(query);
+  } catch {
+    return [...always, ...learned.sort((a, b) => b.importance - a.importance)];
+  }
+  const q = JSON.stringify(qvec);
+  const dist = new Map<string, number>(); // vid -> distance
+  const knn = db.prepare(
+    "SELECT vid, distance FROM memories_vec WHERE embedding MATCH ? AND k = ? AND scope = ? ORDER BY distance"
+  );
+  for (const scope of new Set(learned.map((m) => m.scope))) {
+    const hits = knn.all(q, perScope, scope) as { vid: string; distance: number }[];
+    for (const h of hits) dist.set(h.vid, h.distance);
+  }
+  const ranked = learned
+    .filter((m) => dist.has(vid(m.scope, m.id)))
+    .sort((a, b) => (dist.get(vid(a.scope, a.id))! - dist.get(vid(b.scope, b.id))!));
+  return [...always, ...ranked];
+}
+
+// Create a memory. New learned memories are born at low importance (they must earn
+// trust). A memory can be born "provisional" (still injected, flagged unconfirmed
+// until it earns trust through use — see graduateOnUse).
 export async function writeMemory(input: {
   scope: string;
   type?: MemoryType;
   body: string;
   importance?: number;
   status?: string;
+  pinned?: boolean;
+  confidential?: boolean;
   provenance?: Record<string, unknown>;
   appliesTo?: Record<string, string>;
 }): Promise<Memory> {
-  const dir = path.join(MEM_ROOT, input.scope);
-  await fs.mkdir(dir, { recursive: true });
-  // Random suffix so several memories written in the same millisecond (e.g. the
-  // kickoff interview distilling multiple facts in parallel) get distinct ids
-  // instead of colliding on one filename and overwriting each other.
+  await ensureSeeded();
   const id = `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
-  const data: Record<string, unknown> = {
-    id,
-    type: input.type ?? "learned",
-    importance: input.importance ?? 0.2,
-  };
-  if (input.status) data.status = input.status;
-  if (input.status === "provisional") data.used_since_provisional = 0;
-  if (input.appliesTo) data.applies_to = input.appliesTo;
-  if (input.provenance) data.provenance = input.provenance;
-
-  const file = path.join(dir, `${id}.md`);
-  await fs.writeFile(file, matter.stringify(`${input.body}\n`, data), "utf8");
+  const created = new Date().toISOString().slice(0, 10);
+  const provenance = { ...(input.provenance ?? {}) } as Record<string, unknown>;
+  if (!provenance.created) provenance.created = created;
+  const vec = await embedOne(input.body);
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO memories (scope,id,type,importance,status,pinned,confidential,applies_to,provenance,body,used_since_provisional,created)
+       VALUES (@scope,@id,@type,@importance,@status,@pinned,@confidential,@applies_to,@provenance,@body,@usp,@created)`
+    ).run({
+      scope: input.scope,
+      id,
+      type: input.type ?? "learned",
+      importance: input.importance ?? 0.2,
+      status: input.status ?? "active",
+      pinned: input.pinned ? 1 : 0,
+      confidential: input.confidential ? 1 : 0,
+      applies_to: input.appliesTo ? JSON.stringify(input.appliesTo) : null,
+      provenance: JSON.stringify(provenance),
+      body: input.body,
+      usp: input.status === "provisional" ? 0 : 0,
+      created,
+    });
+    db.prepare("INSERT OR REPLACE INTO memories_vec (vid, scope, embedding) VALUES (?, ?, ?)").run(vid(input.scope, id), input.scope, encodeVec(vec));
+    audit(db, { actor: String(provenance.origin_user ?? "agent"), action: "create", scope: input.scope, memoryId: id, detail: { body: input.body, status: input.status ?? "active" } });
+  })();
 
   return {
     id,
     scope: input.scope,
-    type: (data.type as MemoryType) ?? "learned",
-    importance: data.importance as number,
+    type: input.type ?? "learned",
+    importance: input.importance ?? 0.2,
     status: input.status ?? "active",
+    pinned: !!input.pinned,
+    confidential: !!input.confidential,
     appliesTo: input.appliesTo,
-    provenance: input.provenance,
+    provenance,
+    created,
     body: input.body,
-    file,
+    file: `${input.scope}/${id}`,
   };
 }
 
-// Find a memory file within a scope by its id. Files written by the app are
-// named <id>.md, but hand-authored seeds may have friendly names with the id in
-// their frontmatter — so we check both.
-async function findMemoryFile(scope: string, id: string): Promise<string | null> {
-  const dir = path.join(MEM_ROOT, scope);
-  let names: string[];
-  try {
-    names = await fs.readdir(dir);
-  } catch {
-    return null;
-  }
-  if (names.includes(`${id}.md`)) return path.join(dir, `${id}.md`);
-  for (const name of names) {
-    if (!name.endsWith(".md")) continue;
-    const { data } = matter(await fs.readFile(path.join(dir, name), "utf8"));
-    if (String(data.id ?? "") === id) return path.join(dir, name);
-  }
-  return null;
+// Does a memory row exist? (helper)
+function getRow(scope: string, id: string): Row | undefined {
+  return getDb().prepare("SELECT * FROM memories WHERE scope = ? AND id = ?").get(scope, id) as Row | undefined;
 }
 
-// Read one memory file, mutate its frontmatter, and save it back.
-async function updateMemoryFrontmatter(
+// Edit a memory from the manager: any of body / importance / status / pinned.
+// Importance is clamped to [0,1]; body changes re-embed. Every edit is audited.
+export async function updateMemory(
   scope: string,
   id: string,
-  mutate: (data: Record<string, unknown>) => void
+  patch: { body?: string; importance?: number; status?: string; pinned?: boolean; actor?: string }
 ): Promise<boolean> {
-  const file = await findMemoryFile(scope, id);
-  if (!file) return false;
-  const parsed = matter(await fs.readFile(file, "utf8"));
-  // gray-matter caches parsed results by input string and returns the SAME data
-  // object each time — so we clone before mutating, or we'd poison that cache and
-  // make later reads report stale importance/status (disk stays correct).
-  const data = { ...parsed.data };
-  mutate(data);
-  await fs.writeFile(file, matter.stringify(parsed.content, data), "utf8");
+  const before = getRow(scope, id);
+  if (!before) return false;
+  const sets: string[] = [];
+  const params: Record<string, unknown> = { scope, id };
+  if (typeof patch.importance === "number") {
+    sets.push("importance = @importance");
+    params.importance = Math.max(0, Math.min(1, Number(patch.importance.toFixed(3))));
+  }
+  if (patch.status) {
+    sets.push("status = @status");
+    params.status = patch.status;
+  }
+  if (typeof patch.pinned === "boolean") {
+    sets.push("pinned = @pinned");
+    params.pinned = patch.pinned ? 1 : 0;
+  }
+  let newVec: number[] | null = null;
+  if (patch.body !== undefined) {
+    sets.push("body = @body");
+    params.body = patch.body.trim();
+    newVec = await embedOne(patch.body.trim());
+  }
+  if (sets.length === 0) return true;
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare(`UPDATE memories SET ${sets.join(", ")} WHERE scope = @scope AND id = @id`).run(params);
+    if (newVec) db.prepare("INSERT OR REPLACE INTO memories_vec (vid, scope, embedding) VALUES (?, ?, ?)").run(vid(scope, id), scope, encodeVec(newVec));
+    audit(db, { actor: patch.actor, action: "update", scope, memoryId: id, detail: { patch, from: { importance: before.importance, status: before.status } } });
+  })();
   return true;
 }
 
 // Contest / retract: mark a memory retracted so it stops being injected.
-export async function retractMemory(scope: string, id: string): Promise<boolean> {
-  return updateMemoryFrontmatter(scope, id, (data) => {
-    data.status = "retracted";
-  });
+export async function retractMemory(scope: string, id: string, actor?: string): Promise<boolean> {
+  return updateMemory(scope, id, { status: "retracted", actor });
 }
 
-/* --- Memory manager: browse + curate the whole library ---------------------
-   The manager needs EVERY memory, including retracted ones (so you can restore
-   them), grouped by scope. readMemoriesInScope hides retracted for injection;
-   this walks the tree and keeps them. Folders starting with "_" (e.g. the
-   _promotion_queue) are internal, not memories, so we skip them. */
+// Permanently delete a memory (and its vector).
+export async function deleteMemory(scope: string, id: string, actor?: string): Promise<boolean> {
+  const before = getRow(scope, id);
+  if (!before) return false;
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare("DELETE FROM memories WHERE scope = ? AND id = ?").run(scope, id);
+    db.prepare("DELETE FROM memories_vec WHERE vid = ?").run(vid(scope, id));
+    audit(db, { actor, action: "delete", scope, memoryId: id, detail: { body: before.body } });
+  })();
+  return true;
+}
+
+/* --- Memory manager: browse the whole library (incl. retracted) ----------- */
 export async function listAllMemories(): Promise<Memory[]> {
-  const out: Memory[] = [];
-  async function walk(rel: string): Promise<void> {
-    const dir = path.join(MEM_ROOT, rel);
-    let entries;
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      if (e.name.startsWith("_")) continue; // internal folders (promotion queue, etc.)
-      const childRel = rel ? path.join(rel, e.name) : e.name;
-      if (e.isDirectory()) {
-        await walk(childRel);
-        continue;
-      }
-      if (!e.name.endsWith(".md")) continue;
-      const { data, content } = matter(await fs.readFile(path.join(dir, e.name), "utf8"));
-      out.push({
-        id: String(data.id ?? e.name.replace(/\.md$/, "")),
-        scope: rel,
-        type: data.type === "learned" ? "learned" : "constitution",
-        importance: typeof data.importance === "number" ? data.importance : 0.3,
-        confidential: Boolean(data.confidential),
-        appliesTo: data.applies_to,
-        provenance: data.provenance,
-        status: data.status ? String(data.status) : "active",
-        ...lifecycleFields(data),
-        body: content.trim(),
-        file: path.join(dir, e.name),
-      });
-    }
-  }
-  await walk("");
-  return out;
+  await ensureSeeded();
+  const rows = getDb().prepare("SELECT * FROM memories").all() as Row[];
+  return rows.map(rowToMemory);
 }
 
-// Edit a memory from the manager: any of body / importance / status. Importance
-// is clamped to [0, 1]; status "active" un-retracts. Constitution can be edited
-// too (it's authored), but the UI flags it as authoritative.
-export async function updateMemory(
-  scope: string,
-  id: string,
-  patch: { body?: string; importance?: number; status?: string }
-): Promise<boolean> {
-  const file = await findMemoryFile(scope, id);
-  if (!file) return false;
-  const parsed = matter(await fs.readFile(file, "utf8"));
-  const data = { ...parsed.data }; // clone — don't poison gray-matter's cache (see updateMemoryFrontmatter)
-  if (typeof patch.importance === "number") {
-    data.importance = Math.max(0, Math.min(1, Number(patch.importance.toFixed(3))));
-  }
-  if (patch.status) data.status = patch.status;
-  const body = patch.body !== undefined ? patch.body.trim() : parsed.content.trim();
-  await fs.writeFile(file, matter.stringify(`${body}\n`, data), "utf8");
-  return true;
+// The audit trail for one memory: every create/update/retract/delete/graduate/
+// decay logged against it, newest first. This is what makes a shared memory
+// accountable — you can see who changed what, and when.
+export type AuditEntry = { ts: string; actor: string | null; action: string; detail: unknown };
+export async function memoryHistory(scope: string, id: string): Promise<AuditEntry[]> {
+  await ensureSeeded();
+  const rows = getDb()
+    .prepare("SELECT ts, actor, action, detail FROM audit_log WHERE memory_id = ? AND scope = ? ORDER BY id DESC")
+    .all(id, scope) as { ts: string; actor: string | null; action: string; detail: string | null }[];
+  return rows.map((r) => ({
+    ts: r.ts,
+    actor: r.actor,
+    action: r.action,
+    detail: r.detail ? safeParse(r.detail) : null,
+  }));
 }
-
-// Permanently delete a memory file.
-export async function deleteMemory(scope: string, id: string): Promise<boolean> {
-  const file = await findMemoryFile(scope, id);
-  if (!file) return false;
-  await fs.unlink(file);
-  return true;
+function safeParse(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return s;
+  }
 }
 
 // Record that these memories were actually injected this turn: bump use_count and
-// stamp last_used. This is the USAGE signal (distinct from correctness-based
-// reinforcement) — it powers "most-used" sorting and staleness detection.
+// stamp last_used. This is the USAGE signal — it powers "most-used" sorting and
+// staleness detection. It deliberately does NOT touch importance (usage is not
+// correctness — see graduateOnUse / decay).
 export async function recordMemoryUse(refs: { scope: string; id: string }[]): Promise<void> {
-  await Promise.all(
-    refs.map(({ scope, id }) =>
-      updateMemoryFrontmatter(scope, id, (data) => {
-        data.use_count = (typeof data.use_count === "number" ? data.use_count : 0) + 1;
-        data.last_used = new Date().toISOString().slice(0, 10);
-      }).catch(() => false)
-    )
-  );
+  if (refs.length === 0) return;
+  const db = getDb();
+  const today = new Date().toISOString().slice(0, 10);
+  const stmt = db.prepare("UPDATE memories SET use_count = use_count + 1, last_used = ? WHERE scope = ? AND id = ?");
+  db.transaction(() => refs.forEach((r) => stmt.run(today, r.scope, r.id)))();
 }
 
 // Snooze a stale memory: touch last_used to now so it drops off the "suggest
 // archiving" list without bumping its usefulness score.
 export async function touchMemory(scope: string, id: string): Promise<boolean> {
-  return updateMemoryFrontmatter(scope, id, (data) => {
-    data.last_used = new Date().toISOString().slice(0, 10);
-  });
+  const r = getRow(scope, id);
+  if (!r) return false;
+  getDb().prepare("UPDATE memories SET last_used = ? WHERE scope = ? AND id = ?").run(new Date().toISOString().slice(0, 10), scope, id);
+  return true;
 }
 
-// How many times a provisional memory must be injected (without being contradicted)
-// before it graduates to a trusted, "active" memory.
+// How many times a provisional memory must be injected before it graduates.
 export const GRADUATION_THRESHOLD = 3;
 
-// Graduate provisional memories through USE, not approval. For each provisional
-// memory injected this turn, bump its counter; once it's been leaned on enough
-// times without a 👎 retracting it first, flip it to "active" and lift its
-// importance so it stops carrying the "unconfirmed" label. This is the payoff of
-// the provisional model: kickoff facts earn trust silently as the agent uses them.
+// Graduate provisional memories through USE. For each provisional memory injected
+// this turn, bump its counter; once leaned on enough times without being retracted
+// first, flip it to "active". NOTE: graduation only changes STATUS (provisional →
+// active) — it does not raise importance. Usage is not correctness, so it must not
+// make a memory more heavily weighted (that's what confirmation/promotion do).
 export async function graduateOnUse(refs: { scope: string; id: string }[]): Promise<void> {
-  await Promise.all(
-    refs.map(({ scope, id }) =>
-      updateMemoryFrontmatter(scope, id, (data) => {
-        if (data.status !== "provisional") return; // only provisional memories graduate
-        const seen = (typeof data.used_since_provisional === "number" ? data.used_since_provisional : 0) + 1;
-        data.used_since_provisional = seen;
-        if (seen >= GRADUATION_THRESHOLD) {
-          data.status = "active";
-          const current = typeof data.importance === "number" ? data.importance : 0.2;
-          data.importance = Math.max(current, 0.4); // confirmed by use — now meaningful
-        }
-      }).catch(() => false)
-    )
-  );
+  if (refs.length === 0) return;
+  const db = getDb();
+  db.transaction(() => {
+    for (const r of refs) {
+      const row = db.prepare("SELECT status, used_since_provisional FROM memories WHERE scope = ? AND id = ?").get(r.scope, r.id) as
+        | { status: string; used_since_provisional: number }
+        | undefined;
+      if (!row || row.status !== "provisional") continue;
+      const seen = (row.used_since_provisional ?? 0) + 1;
+      if (seen >= GRADUATION_THRESHOLD) {
+        db.prepare("UPDATE memories SET status = 'active', used_since_provisional = ? WHERE scope = ? AND id = ?").run(seen, r.scope, r.id);
+        audit(db, { actor: "system", action: "graduate", scope: r.scope, memoryId: r.id, detail: { seen } });
+      } else {
+        db.prepare("UPDATE memories SET used_since_provisional = ? WHERE scope = ? AND id = ?").run(seen, r.scope, r.id);
+      }
+    }
+  })();
 }

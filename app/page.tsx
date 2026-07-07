@@ -217,6 +217,7 @@ type MemItem = {
   importance: number;
   status: string;
   confidential?: boolean;
+  pinned?: boolean;
   useCount?: number;
   lastUsed?: string;
   created?: string;
@@ -263,7 +264,7 @@ function canApproveScope(u: string, scope: string): boolean {
   if (["stakeholder", "client", "sector", "company"].includes(level)) return CLIENT_ROLES[u] === "lead";
   return CLIENT_ROLES[u] === "lead";
 }
-type Leak = { flagged: boolean; hits: string[] };
+type Leak = { flagged: boolean; hits: string[]; reasons?: string[] };
 type Signal = {
   pattern: string;
   count: number;
@@ -330,6 +331,8 @@ export default function Home() {
   const [allMemories, setAllMemories] = useState<MemItem[]>([]);
   const [memDraft, setMemDraft] = useState<Record<string, { body: string; importance: number }>>({});
   const [memNote, setMemNote] = useState<string | null>(null);
+  const [memHistory, setMemHistory] = useState<Record<string, { ts: string; actor: string | null; action: string }[]>>({});
+  const [openHistory, setOpenHistory] = useState<string | null>(null);
   // Library browse controls (find / filter / sort) — for when there are lots of memories.
   const [memSearch, setMemSearch] = useState("");
   const [memLevel, setMemLevel] = useState("all");
@@ -640,10 +643,44 @@ export default function Home() {
     await fetch("/api/memory/update", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scope: m.scope, id: m.id, status }),
+      body: JSON.stringify({ scope: m.scope, id: m.id, status, user }),
     });
     setMemNote(`${status === "retracted" ? "retracted" : "restored"} ${m.scope}/${m.id}`);
     loadMemories();
+  }
+  // Pin / unpin: a pinned learned memory rides the always-on cached tier (it's
+  // deliberately kept, and — unlike ordinary importance — never decays).
+  async function setMemPinned(m: MemItem, pinned: boolean) {
+    await fetch("/api/memory/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: m.scope, id: m.id, pinned, user }),
+    });
+    setMemNote(`${pinned ? "pinned" : "unpinned"} ${m.scope}/${m.id}`);
+    loadMemories();
+  }
+  // Show (or hide) a memory's audit trail — who changed it, when.
+  async function toggleHistory(m: MemItem) {
+    const key = `${m.scope}/${m.id}`;
+    if (openHistory === key) { setOpenHistory(null); return; }
+    setOpenHistory(key);
+    if (!memHistory[key]) {
+      const d = await fetch(`/api/memory/history?scope=${encodeURIComponent(m.scope)}&id=${encodeURIComponent(m.id)}`)
+        .then((r) => r.json())
+        .catch(() => ({ history: [] }));
+      setMemHistory((h) => ({ ...h, [key]: d.history ?? [] }));
+    }
+  }
+  // Run memory maintenance (decay untouched learned memory) when the manager opens.
+  function runMaintain() {
+    fetch("/api/memory/maintain", { method: "POST" })
+      .then((r) => r.json())
+      .then((d) => {
+        if ((d?.decayed ?? 0) + (d?.archived ?? 0) > 0) setMemNote(`maintenance: decayed ${d.decayed}, archived ${d.archived}`);
+        loadMemories();
+        loadLifecycle();
+      })
+      .catch(() => {});
   }
   async function deleteMem(m: MemItem) {
     await fetch("/api/memory/delete", {
@@ -678,13 +715,23 @@ export default function Home() {
     }
   }
 
-  async function doPromote(id: string) {
+  async function doPromote(id: string, acknowledgedLeak = false) {
     const text = abstracts[id]?.text ?? nominations.find((n) => n.id === id)?.fact ?? "";
     const d = await fetch("/api/promotions/promote", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, text, user }),
+      body: JSON.stringify({ id, text, user, acknowledgedLeak }),
     }).then((r) => r.json());
+    // Confidentiality gate: the server blocked this because the final text still
+    // looks like it could identify the client. Make the reviewer confirm explicitly.
+    if (d.needsAck && !acknowledgedLeak) {
+      const detail = [...(d.hits ?? []), ...(d.reasons ?? [])].filter(Boolean).join("; ");
+      if (confirm(`This still looks like it could identify the client${detail ? `:\n\n${detail}` : ""}.\n\nPromote to the shared scope anyway?`)) {
+        return doPromote(id, true);
+      }
+      setMemNote("promotion blocked — client detail present");
+      return;
+    }
     if (d.error) { setMemNote(d.error); return; }
     if (d.ok) { setNominations((ns) => ns.filter((n) => n.id !== id)); loadMemories(); }
   }
@@ -1027,7 +1074,7 @@ export default function Home() {
           </button>
           <button
             className="queue-btn"
-            onClick={() => { loadMemories(); loadProposals(); loadPromotions(); loadSignals(); loadLifecycle(); setShowMemory(true); }}
+            onClick={() => { loadMemories(); loadProposals(); loadPromotions(); loadSignals(); loadLifecycle(); runMaintain(); setShowMemory(true); }}
           >
             🧠 Memory manager{proposals.length + nominations.length ? ` (${proposals.length + nominations.length})` : ""}
           </button>
@@ -1708,6 +1755,7 @@ export default function Home() {
                           <div className="mem-meta">
                             <span className="mem-scope">{m.scope}</span>
                             <span className={`pill ${isConstitution ? "stable" : "ranked"}`}>{m.type}</span>
+                            {m.pinned && <span className="pill stable" title="pinned into the always-on cached tier; never decays">📌 pinned</span>}
                             {m.confidential && <span className="pill conf">confidential</span>}
                             {retracted && <span className="pill ret">archived</span>}
                             {m.useCount ? <span className="mem-uses" title="turns it's been injected into">used {m.useCount}×</span> : null}
@@ -1747,6 +1795,15 @@ export default function Home() {
                             )}
                             <div className="mem-actions">
                               <button className="mini" onClick={() => saveMem(m)}>Save</button>
+                              {!isConstitution && !retracted && (
+                                <button
+                                  className="mini"
+                                  title={m.pinned ? "unpin — let it rank and decay normally" : "pin into the always-on cached tier; it won't decay"}
+                                  onClick={() => setMemPinned(m, !m.pinned)}
+                                >
+                                  {m.pinned ? "📌 Unpin" : "📌 Pin"}
+                                </button>
+                              )}
                               {retracted ? (
                                 <button className="mini" title="use this memory again" onClick={() => setMemStatus(m, "active")}>
                                   Restore
@@ -1760,6 +1817,9 @@ export default function Home() {
                                   Archive
                                 </button>
                               )}
+                              <button className="mini" title="who changed this memory, and when" onClick={() => toggleHistory(m)}>
+                                History
+                              </button>
                               <button
                                 className="reject"
                                 title="delete the file permanently — cannot be undone"
@@ -1770,6 +1830,21 @@ export default function Home() {
                                 Delete
                               </button>
                             </div>
+                            {openHistory === `${m.scope}/${m.id}` && (
+                              <div className="mem-history">
+                                {(memHistory[`${m.scope}/${m.id}`] ?? []).length === 0 ? (
+                                  <div className="mem-history-empty">no recorded changes yet</div>
+                                ) : (
+                                  (memHistory[`${m.scope}/${m.id}`] ?? []).map((h, i) => (
+                                    <div key={i} className="mem-history-row">
+                                      <span className={`pill ${h.action === "delete" || h.action === "decay" ? "ret" : "ranked"}`}>{h.action}</span>
+                                      <span className="mem-history-actor">{h.actor ?? "—"}</span>
+                                      <span className="mem-history-ts">{h.ts.replace("T", " ").slice(0, 16)}</span>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                       );
@@ -1839,7 +1914,11 @@ export default function Home() {
                       <>
                         {abstracts[n.id].leak?.flagged && (
                           <div className="leak">
-                            ⚠ possible client detail still present: {abstracts[n.id].leak!.hits.join(", ")} — edit before promoting
+                            ⚠ possible client detail still present
+                            {[...(abstracts[n.id].leak!.hits ?? []), ...(abstracts[n.id].leak!.reasons ?? [])].filter(Boolean).length > 0
+                              ? `: ${[...(abstracts[n.id].leak!.hits ?? []), ...(abstracts[n.id].leak!.reasons ?? [])].filter(Boolean).join(", ")}`
+                              : ""}{" "}
+                            — edit before promoting
                           </div>
                         )}
                         <textarea
