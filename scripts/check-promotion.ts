@@ -21,7 +21,7 @@ async function main() {
 
   const wc = buildWorkingContext({ projectId: project, openFile: null });
   const mems = await getMemoriesForContext(user, project);
-  const asm = assembleContext(mems, wc);
+  const asm = await assembleContext(mems, wc, message);
   const { text, trace } = await respond([{ role: "user", content: message }], {
     projectId: project,
     user,

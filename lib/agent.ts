@@ -32,11 +32,19 @@ export const SYSTEM_BASE = `You are an AI teammate inside a consulting team's sh
 You help consultants think through client projects using the project's files:
 interviews, notes, hypotheses, and research.
 
-You have tools to navigate the SHARED corpus: list_files, read_file, search_files
-(exact keywords), semantic_search (by meaning), and write_file. Ground your answers
-in the real files — prefer reading them over guessing. If the user refers to "this", "that file", or "the doc", resolve it from
-the WORKING CONTEXT block (their currently open file). Only use write_file when the
-user asks you to create or save something.
+You have tools to navigate the SHARED corpus: list_files, read_file, search_files,
+semantic_search, and write_file. Ground your answers in the real files — prefer
+reading them over guessing. Choose the right tool deliberately:
+  • read_file — when the user points at a file ("this", "that doc") or you already
+    know the exact path. Resolve "this"/"the doc" from the WORKING CONTEXT block.
+  • semantic_search — for conceptual or open-ended questions, or when the user's
+    wording likely differs from the documents' ("willingness to pay" vs "pricing
+    sensitivity"). It reranks to the best passages, so trust its top results.
+  • search_files — for exact names, figures, or literal phrases you expect verbatim.
+  • list_files — when you need to see what exists first.
+When an answer spans several files, gather from each and synthesise rather than
+answering from one. Only use write_file when the user asks you to create or save
+something.
 
 You also have long-term MEMORY. Facts you already know appear in the MEMORY section
 of this prompt — respect them and weigh each by its trust label. When the user tells
@@ -188,7 +196,7 @@ export async function runAgent(
   return { text: "(stopped after too many tool steps)", trace, usage, reasoning };
 }
 
-// Non-streaming wrapper — used by the eval harness and /api/compare.
+// Non-streaming wrapper — used by the eval harness.
 export async function respond(
   messages: Message[],
   opts: { projectId: string; user: string; stableBlock?: string; volatileBlock?: string; agent?: AgentSpec }
@@ -222,20 +230,6 @@ function textOf(response: Anthropic.Message): string {
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
     .join("");
-}
-
-// Answer a question using ONLY the supplied passages (used by the retrieval
-// comparison, so naïve-vector and reranked-vector answer purely from what they
-// retrieved — no tools, no memory).
-export async function answerFromContext(query: string, context: string): Promise<string> {
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 500,
-    system:
-      "Answer the question using ONLY the provided context passages. If they don't contain the answer, say so plainly. Be concise.",
-    messages: [{ role: "user", content: `Context passages:\n${context}\n\nQuestion: ${query}` }],
-  });
-  return textOf(response) || "(no answer)";
 }
 
 /* ---------------------------------------------------------------------------
@@ -394,26 +388,4 @@ export async function distillFacts(projectId: string, answers: { question: strin
   });
   const parsed = parseJsonObject<{ facts: string[] }>(textOf(response), { facts: [] });
   return Array.isArray(parsed.facts) ? parsed.facts.filter((f) => typeof f === "string" && f.trim()).map((f) => f.trim()) : [];
-}
-
-// LLM-as-reranker: reorder retrieved passages by true relevance and return the
-// indices of the best few, best first. This is what makes the vector comparison
-// honest (naïve top-k alone is rough).
-export async function rerank(query: string, passages: string[], topN = 3): Promise<number[]> {
-  const numbered = passages.map((p, i) => `[${i}] ${p.slice(0, 400)}`).join("\n\n");
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 60,
-    system:
-      "You are a reranker. Given a query and numbered passages, return ONLY a JSON array of the passage indices most relevant to the query, best first.",
-    messages: [{ role: "user", content: `Query: ${query}\n\nPassages:\n${numbered}\n\nTop ${topN} indices as JSON:` }],
-  });
-  try {
-    const match = textOf(response).match(/\[[\d,\s]*\]/);
-    const arr = match ? (JSON.parse(match[0]) as number[]) : [];
-    const valid = arr.filter((i) => Number.isInteger(i) && i >= 0 && i < passages.length);
-    return valid.length ? valid.slice(0, topN) : passages.map((_, i) => i).slice(0, topN);
-  } catch {
-    return passages.map((_, i) => i).slice(0, topN);
-  }
 }

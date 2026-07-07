@@ -207,25 +207,6 @@ async function updateMemoryFrontmatter(
   return true;
 }
 
-// Reinforcement keyed off CORRECTNESS, not usage — this is the anti-poisoning
-// rule. Only LEARNED memory moves; constitution is authoritative and never
-// nudged. Importance is clamped to [0, 1].
-export async function reinforceMemory(scope: string, id: string, delta: number): Promise<boolean> {
-  return updateMemoryFrontmatter(scope, id, (data) => {
-    if (data.type === "constitution") return; // authoritative — leave untouched
-    // A provisional (unconfirmed) memory that gets contradicted (👎) hasn't earned
-    // its place — retract it outright rather than merely nudging it down.
-    if (data.status === "provisional" && delta < 0) {
-      data.status = "retracted";
-      data.last_reinforced = new Date().toISOString().slice(0, 10);
-      return;
-    }
-    const current = typeof data.importance === "number" ? data.importance : 0.3;
-    data.importance = Math.max(0, Math.min(1, Number((current + delta).toFixed(3))));
-    data.last_reinforced = new Date().toISOString().slice(0, 10);
-  });
-}
-
 // Contest / retract: mark a memory retracted so it stops being injected.
 export async function retractMemory(scope: string, id: string): Promise<boolean> {
   return updateMemoryFrontmatter(scope, id, (data) => {
