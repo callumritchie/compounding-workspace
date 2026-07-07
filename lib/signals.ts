@@ -1,30 +1,28 @@
 /* ---------------------------------------------------------------------------
-   signals.ts — the implicit-signal ledger.
+   signals.ts — the implicit-signal ledger (now a database table).
 
-   Not every insight arrives as an explicit "remember this". Often a pattern
-   just recurs — the agent notices the same thing a few times. This ledger lets
-   those quiet, repeated observations ACCUMULATE strength, and once a pattern
-   crosses a threshold it auto-creates a promotion nomination for human review.
+   Not every insight arrives as an explicit "remember this". Often a pattern just
+   recurs — the agent notices the same thing a few times. This ledger lets those
+   quiet, repeated observations ACCUMULATE strength, and once a pattern crosses a
+   threshold it auto-creates a promotion nomination for human review.
 
-   So there are two ways a nomination reaches the review queue:
+   Two ways a nomination reaches the review queue:
      • explicit  — the agent calls nominate_for_promotion
      • implicit  — a pattern recurs enough here to cross the threshold
 
-   The ledger is pruned so stale, one-off signals don't pile up forever.
-   Stored as workspace/signals/ledger.json — open it and watch strength build.
+   Moved off a single JSON file (which was rewritten wholesale on every note — a
+   lost-update race under concurrency) onto a transactional table.
 --------------------------------------------------------------------------- */
 
-import { promises as fs } from "fs";
-import path from "path";
+import { getDb } from "./db";
+import { ensureSeeded } from "./seed";
 import { addNomination } from "./promotion";
-
-const LEDGER = path.join(process.cwd(), "workspace", "signals", "ledger.json");
 
 export const SIGNAL_THRESHOLD = 3; // repeats needed before a signal auto-nominates
 const PRUNE_DAYS = 30; // drop signals not seen within this window
 
 export type Signal = {
-  pattern: string; // short stable key so repeats accumulate
+  pattern: string;
   count: number;
   lastSeen: string;
   lastObservation: string;
@@ -34,26 +32,39 @@ export type Signal = {
   sourceClient: string;
 };
 
+type Row = {
+  pattern: string;
+  count: number;
+  last_seen: string | null;
+  last_observation: string | null;
+  target_scope: string | null;
+  nominated: number;
+  source_project: string | null;
+  source_client: string | null;
+};
+
+function rowToSignal(r: Row): Signal {
+  return {
+    pattern: r.pattern,
+    count: r.count,
+    lastSeen: r.last_seen ?? "",
+    lastObservation: r.last_observation ?? "",
+    targetScope: r.target_scope ?? "",
+    nominated: !!r.nominated,
+    sourceProject: r.source_project ?? "",
+    sourceClient: r.source_client ?? "",
+  };
+}
+
 function daysSince(dateStr: string): number {
   const then = new Date(`${dateStr}T00:00:00Z`).getTime();
   return (Date.now() - then) / 86_400_000;
 }
 
-async function readLedger(): Promise<Signal[]> {
-  try {
-    return JSON.parse(await fs.readFile(LEDGER, "utf8")) as Signal[];
-  } catch {
-    return [];
-  }
-}
-
-async function writeLedger(signals: Signal[]): Promise<void> {
-  await fs.mkdir(path.dirname(LEDGER), { recursive: true });
-  await fs.writeFile(LEDGER, JSON.stringify(signals, null, 2), "utf8");
-}
-
 export async function listSignals(): Promise<Signal[]> {
-  return (await readLedger()).sort((a, b) => b.count - a.count);
+  await ensureSeeded();
+  const rows = getDb().prepare("SELECT * FROM signals ORDER BY count DESC").all() as Row[];
+  return rows.map(rowToSignal);
 }
 
 // Record one observation of a pattern. Returns the running strength and whether
@@ -65,44 +76,53 @@ export async function noteSignal(input: {
   sourceProject: string;
   sourceClient: string;
 }): Promise<{ count: number; threshold: number; nominatedNow: boolean }> {
+  await ensureSeeded();
   const today = new Date().toISOString().slice(0, 10);
+  const db = getDb();
 
-  // Prune stale signals first, then find/create this one.
-  let signals = (await readLedger()).filter((s) => daysSince(s.lastSeen) <= PRUNE_DAYS);
-  let sig = signals.find((s) => s.pattern === input.pattern);
-  if (!sig) {
-    sig = {
+  // Prune stale signals, then upsert this one — all in one transaction so a
+  // concurrent note can't interleave and lose the increment.
+  const result = db.transaction(() => {
+    // prune
+    const all = db.prepare("SELECT pattern, last_seen FROM signals").all() as { pattern: string; last_seen: string | null }[];
+    for (const s of all) {
+      if (s.last_seen && daysSince(s.last_seen) > PRUNE_DAYS) db.prepare("DELETE FROM signals WHERE pattern = ?").run(s.pattern);
+    }
+    const existing = db.prepare("SELECT * FROM signals WHERE pattern = ?").get(input.pattern) as Row | undefined;
+    const count = (existing?.count ?? 0) + 1;
+    const alreadyNominated = !!existing?.nominated;
+    db.prepare(
+      `INSERT INTO signals (pattern,count,last_seen,last_observation,target_scope,nominated,source_project,source_client)
+         VALUES (@pattern,@count,@last_seen,@obs,@scope,@nominated,@project,@client)
+       ON CONFLICT(pattern) DO UPDATE SET
+         count=@count, last_seen=@last_seen, last_observation=@obs, target_scope=@scope`
+    ).run({
       pattern: input.pattern,
-      count: 0,
-      lastSeen: today,
-      lastObservation: input.observation,
-      targetScope: input.targetScope,
-      nominated: false,
-      sourceProject: input.sourceProject,
-      sourceClient: input.sourceClient,
-    };
-    signals.push(sig);
-  }
+      count,
+      last_seen: today,
+      obs: input.observation,
+      scope: input.targetScope,
+      nominated: alreadyNominated ? 1 : 0,
+      project: input.sourceProject,
+      client: input.sourceClient,
+    });
+    return { count, alreadyNominated };
+  })();
 
-  sig.count += 1;
-  sig.lastSeen = today;
-  sig.lastObservation = input.observation;
-  sig.targetScope = input.targetScope;
-
+  // Cross the threshold → nominate (outside the sync txn; addNomination is async).
   let nominatedNow = false;
-  if (sig.count >= SIGNAL_THRESHOLD && !sig.nominated) {
+  if (result.count >= SIGNAL_THRESHOLD && !result.alreadyNominated) {
     await addNomination({
       fact: input.observation,
       targetScope: input.targetScope,
-      reason: `Recurring signal seen ${sig.count}× ("${input.pattern}")`,
+      reason: `Recurring signal seen ${result.count}× ("${input.pattern}")`,
       nominatedBy: "signal-ledger",
       sourceProject: input.sourceProject,
       sourceClient: input.sourceClient,
     });
-    sig.nominated = true;
+    db.prepare("UPDATE signals SET nominated = 1 WHERE pattern = ?").run(input.pattern);
     nominatedNow = true;
   }
 
-  await writeLedger(signals);
-  return { count: sig.count, threshold: SIGNAL_THRESHOLD, nominatedNow };
+  return { count: result.count, threshold: SIGNAL_THRESHOLD, nominatedNow };
 }

@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   promotion.ts — the compounding engine's spine.
+   promotion.ts — the compounding engine's spine (now a database table).
 
    Higher scopes (sector, company-lessons) are NOT authored directly. They are
    synthesised from what happens on projects, through a reviewed pipeline:
@@ -8,38 +8,55 @@
      (on a project)       (agent flags   (the "latent signals    (abstracted, to
                            it generalises) inbox" — you decide)   a broader scope)
 
-   This is deliberately gated by a human: auto-promoting everything would flood
-   the company brain with noise and leak client specifics. The review queue is
-   also the product's "latent signals" feature — the inbox that informs how the
-   consultancy scopes and pitches work.
-
-   Nominations live as JSON under workspace/memory/_promotion_queue/.
+   Gated by a human on purpose: auto-promoting everything would flood the company
+   brain with noise and leak client specifics. Nominations live in the `promotions`
+   table (were loose JSON files, one per nomination).
 --------------------------------------------------------------------------- */
 
-import { promises as fs } from "fs";
-import path from "path";
+import { getDb, audit } from "./db";
+import { ensureSeeded } from "./seed";
 import { writeMemory } from "./memory";
-
-const QUEUE_DIR = path.join(process.cwd(), "workspace", "memory", "_promotion_queue");
 
 export type Nomination = {
   id: string;
-  fact: string; // the lesson as observed (may be project-specific)
-  targetScope: string; // where it would be promoted, e.g. "sector/healthcare"
-  reason: string; // why it generalises beyond this project
-  nominatedBy: string; // user id or "agent"
+  fact: string;
+  targetScope: string;
+  reason: string;
+  nominatedBy: string;
   sourceProject: string;
-  sourceClient: string; // used by the confidentiality leak-check at promotion
+  sourceClient: string;
   status: "pending" | "promoted" | "rejected";
   created: string;
 };
 
-async function ensureDir() {
-  await fs.mkdir(QUEUE_DIR, { recursive: true });
+type Row = {
+  id: string;
+  fact: string | null;
+  target_scope: string | null;
+  reason: string | null;
+  nominated_by: string | null;
+  source_project: string | null;
+  source_client: string | null;
+  status: string;
+  created: string | null;
+};
+
+function rowToNom(r: Row): Nomination {
+  return {
+    id: r.id,
+    fact: r.fact ?? "",
+    targetScope: r.target_scope ?? "",
+    reason: r.reason ?? "",
+    nominatedBy: r.nominated_by ?? "",
+    sourceProject: r.source_project ?? "",
+    sourceClient: r.source_client ?? "",
+    status: (r.status as Nomination["status"]) ?? "pending",
+    created: r.created ?? "",
+  };
 }
 
-// Confidentiality leak-check: flag if any client-identifying term survives into
-// the text about to be promoted to a shared scope. Cheap but effective guard.
+// Confidentiality leak-check (cheap substring pre-filter). Phase D adds an LLM
+// classifier on top; this stays as the fast first pass.
 export function leakCheck(text: string, terms: string[]): { flagged: boolean; hits: string[] } {
   const low = text.toLowerCase();
   const hits = terms.filter((t) => t && low.includes(t.toLowerCase()));
@@ -54,69 +71,53 @@ export async function addNomination(input: {
   sourceProject: string;
   sourceClient: string;
 }): Promise<Nomination> {
-  await ensureDir();
-  const nom: Nomination = {
-    id: `nom_${Date.now().toString(36)}`,
-    fact: input.fact,
-    targetScope: input.targetScope,
-    reason: input.reason,
-    nominatedBy: input.nominatedBy,
-    sourceProject: input.sourceProject,
-    sourceClient: input.sourceClient,
-    status: "pending",
-    created: new Date().toISOString().slice(0, 10),
-  };
-  await fs.writeFile(path.join(QUEUE_DIR, `${nom.id}.json`), JSON.stringify(nom, null, 2), "utf8");
-  return nom;
+  await ensureSeeded();
+  const id = `nom_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`;
+  const created = new Date().toISOString().slice(0, 10);
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO promotions (id,fact,target_scope,reason,nominated_by,source_project,source_client,status,created)
+       VALUES (?,?,?,?,?,?,?, 'pending', ?)`
+    ).run(id, input.fact, input.targetScope, input.reason, input.nominatedBy, input.sourceProject, input.sourceClient, created);
+    audit(db, { actor: input.nominatedBy, action: "nominate", scope: input.targetScope, detail: { fact: input.fact, reason: input.reason } });
+  })();
+  return { id, ...input, status: "pending", created };
 }
 
 export async function listNominations(status?: Nomination["status"]): Promise<Nomination[]> {
-  let names: string[];
-  try {
-    names = await fs.readdir(QUEUE_DIR);
-  } catch {
-    return [];
-  }
-  const out: Nomination[] = [];
-  for (const name of names) {
-    if (!name.endsWith(".json")) continue;
-    const nom = JSON.parse(await fs.readFile(path.join(QUEUE_DIR, name), "utf8")) as Nomination;
-    if (!status || nom.status === status) out.push(nom);
-  }
-  return out.sort((a, b) => a.created.localeCompare(b.created));
+  await ensureSeeded();
+  const rows = (status
+    ? getDb().prepare("SELECT * FROM promotions WHERE status = ? ORDER BY created").all(status)
+    : getDb().prepare("SELECT * FROM promotions ORDER BY created").all()) as Row[];
+  return rows.map(rowToNom);
 }
 
 export async function getNomination(id: string): Promise<Nomination | null> {
-  try {
-    return JSON.parse(await fs.readFile(path.join(QUEUE_DIR, `${id}.json`), "utf8")) as Nomination;
-  } catch {
-    return null;
-  }
+  const r = getDb().prepare("SELECT * FROM promotions WHERE id = ?").get(id) as Row | undefined;
+  return r ? rowToNom(r) : null;
 }
 
-async function saveNomination(nom: Nomination): Promise<void> {
-  await fs.writeFile(path.join(QUEUE_DIR, `${nom.id}.json`), JSON.stringify(nom, null, 2), "utf8");
-}
-
-// Reject a nomination (keep it in the record, marked rejected).
-export async function rejectNomination(id: string): Promise<boolean> {
-  const nom = await getNomination(id);
-  if (!nom) return false;
-  nom.status = "rejected";
-  await saveNomination(nom);
-  return true;
+// Reject a nomination (keep it, marked rejected).
+export async function rejectNomination(id: string, actor?: string): Promise<boolean> {
+  const db = getDb();
+  const info = db.transaction(() => {
+    const r = db.prepare("UPDATE promotions SET status = 'rejected' WHERE id = ?").run(id);
+    if (r.changes) audit(db, { actor, action: "reject-promotion", detail: { id } });
+    return r.changes;
+  })();
+  return info > 0;
 }
 
 // Promote: write the (already-abstracted) text to the target scope as a learned
-// memory, tagged with where it came from, and mark the nomination promoted.
+// memory, tag it with where it came from, and mark the nomination promoted.
 export async function promoteNomination(
   id: string,
-  finalText: string
+  finalText: string,
+  actor?: string
 ): Promise<{ ok: boolean; scope?: string }> {
   const nom = await getNomination(id);
   if (!nom) return { ok: false };
-  // Tag the promoted memory so it only applies within its scope (e.g. a
-  // sector/healthcare memory carries applies_to {sector: healthcare}).
   const [kind, name] = nom.targetScope.split("/");
   const appliesTo: Record<string, string> | undefined =
     kind === "sector" ? { sector: name } : kind === "client" ? { client: name } : undefined;
@@ -124,16 +125,20 @@ export async function promoteNomination(
     scope: nom.targetScope,
     type: "learned",
     body: finalText,
-    importance: 0.5, // promoted lessons start meaningful but still earn trust
+    importance: 0.5,
     appliesTo,
     provenance: {
       origin: "promoted",
       from_project: nom.sourceProject,
       nominated_by: nom.nominatedBy,
+      approved_by: actor,
       promoted: new Date().toISOString().slice(0, 10),
     },
   });
-  nom.status = "promoted";
-  await saveNomination(nom);
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare("UPDATE promotions SET status = 'promoted' WHERE id = ?").run(id);
+    audit(db, { actor, action: "promote", scope: nom.targetScope, detail: { id, text: finalText } });
+  })();
   return { ok: true, scope: nom.targetScope };
 }

@@ -9,6 +9,9 @@
     "start": "sh scripts/with-env.sh next start",
     "eval": "sh scripts/with-env.sh tsx scripts/eval.ts",
     "index": "sh scripts/with-env.sh tsx scripts/build-index.ts",
+    "db:reseed": "sh scripts/with-env.sh tsx scripts/db-reseed.ts",
+    "check:invariants": "sh scripts/with-env.sh tsx scripts/check-invariants.ts",
+    "verify": "npm run check:invariants && npm run eval",
     "check:corpus": "sh scripts/with-env.sh tsx scripts/check-corpus.ts"
   },
   "dependencies": {
