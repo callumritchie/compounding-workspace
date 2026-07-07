@@ -6,7 +6,7 @@ async function main() {
   const { buildIndex } = await import("../lib/vectors");
   console.log("chunking + embedding the corpus…");
   const n = await buildIndex();
-  console.log(`✅ indexed ${n} chunks → workspace/index/vectors.json`);
+  console.log(`✅ indexed ${n} chunks → workspace/index/vectors.db`);
 }
 
 main();

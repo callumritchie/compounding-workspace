@@ -14,15 +14,18 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
     "@huggingface/transformers": "^4.2.0",
+    "better-sqlite3": "^12.11.1",
     "gray-matter": "^4.0.3",
     "next": "^16.2.10",
     "pdf-parse": "^2.4.5",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "sqlite-vec": "^0.1.9"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^26.1.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

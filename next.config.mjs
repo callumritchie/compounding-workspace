@@ -2,7 +2,7 @@
 const nextConfig = {
   // The Anthropic SDK and pdf/embedding libraries are server-only Node packages.
   // Keeping them external avoids bundling issues in server routes.
-  serverExternalPackages: ["@anthropic-ai/sdk", "@huggingface/transformers", "pdf-parse"],
+  serverExternalPackages: ["@anthropic-ai/sdk", "@huggingface/transformers", "pdf-parse", "better-sqlite3", "sqlite-vec"],
 };
 
 export default nextConfig;
