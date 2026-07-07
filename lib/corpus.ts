@@ -63,9 +63,21 @@ export async function listFiles(projectId: string): Promise<string[]> {
   return out.sort();
 }
 
-// Read one file's full text.
+// Read one file's full text. Tolerant of a dropped directory prefix: agents
+// sometimes ask for "tension.md" when the file is "synthesis/tension.md". If the
+// exact path misses but exactly ONE corpus file has that basename, read that —
+// so a common LLM slip doesn't surface as an ENOENT error in the trace.
 export async function readFile(projectId: string, relPath: string): Promise<string> {
-  return fs.readFile(safeResolve(projectId, relPath), "utf8");
+  try {
+    return await fs.readFile(safeResolve(projectId, relPath), "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
+    const base = relPath.split("/").pop()?.toLowerCase();
+    if (!base) throw err;
+    const matches = (await listFiles(projectId)).filter((f) => f.split("/").pop()?.toLowerCase() === base);
+    if (matches.length === 1) return fs.readFile(safeResolve(projectId, matches[0]), "utf8");
+    throw err;
+  }
 }
 
 // Write (create or overwrite) one file, making parent folders as needed.

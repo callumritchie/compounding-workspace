@@ -16,6 +16,9 @@ workspace/index/
 # Derived per-project kickoff-brief cache (regenerates on demand from memory)
 workspace/projects/*/kickoff.json
 
+# Derived per-project next-actions ("Compass") cache (regenerates from state)
+workspace/projects/*/compass.json
+
 # OS
 .DS_Store
 
