@@ -411,3 +411,35 @@ html, body {
 .intake-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
 .intake-actions .guide-send { width: auto; margin: 0; }
 .intake-actions .ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: 12px; }
+
+/* ---- Compass: stage + next-best-actions strip (above the composer) ---- */
+.compass { border-top: 1px solid var(--border); padding: 8px 2px 2px; margin-top: 6px; }
+.compass-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.compass-stage { font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 2px 9px; cursor: help; white-space: nowrap; }
+.compass-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.compass-head .ic-x { margin-left: auto; }
+.compass-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.compass-chip { width: auto; margin: 0; font-size: 12px; padding: 5px 10px; border-radius: 999px; }
+.compass-reopen { border-top: 1px solid var(--border); margin-top: 6px; width: 100%; text-align: left; background: transparent; border-left: none; border-right: none; border-bottom: none; color: var(--muted); font-size: 12px; padding: 8px 2px 2px; cursor: pointer; }
+.compass-reopen:hover { color: var(--accent); }
+
+/* RAG panel in the x-ray — the vector-retrieval arm made legible */
+.xray-rag { margin: 4px 0 8px; }
+.rag-q { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+.rag-hit { border-left: 2px solid var(--accent); padding: 2px 0 2px 8px; margin: 4px 0; }
+.rag-hit-head { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--accent); }
+.rag-hit-body { font-size: 12px; line-height: 1.4; color: var(--muted); margin-top: 2px; }
+
+/* ---- Proactive popup (bottom-right toast) ---- */
+.nudge { position: fixed; right: 18px; bottom: 18px; width: 320px; max-width: calc(100vw - 36px); background: var(--panel); border: 1px solid var(--accent); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.18); z-index: 45; overflow: hidden; }
+.nudge-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: var(--accent-soft); font-size: 12px; font-weight: 600; color: var(--accent); }
+.nudge-head .ic-x { margin-left: auto; font-size: 13px; }
+.nudge-body { max-height: 60vh; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.nudge-item { border: 1px solid var(--border); border-radius: 9px; padding: 9px 10px; background: var(--bg); }
+.nudge-item.offer { border-color: var(--accent); }
+.nudge-kind { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+.nudge-title { font-size: 13px; line-height: 1.4; margin-bottom: 3px; }
+.nudge-why { font-size: 11px; color: var(--muted); margin-bottom: 7px; }
+.nudge-actions { display: flex; gap: 6px; align-items: center; }
+.nudge-actions .ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
+.nudge-actions .promote { padding: 4px 12px; }

@@ -20,7 +20,7 @@ import { createHash } from "crypto";
 import type { Message } from "./workspace";
 import { TOOLS, executeTool, type TraceEntry } from "./tools";
 import { getMemoriesForContext } from "./memory";
-import { readFile } from "./corpus";
+import { readFile, listFiles } from "./corpus";
 import { getProjectConfig } from "./project";
 
 // The reasoning engine. `claude-opus-4-8` is Anthropic's most capable Opus model.
@@ -186,7 +186,11 @@ export async function runAgent(
         tu.name,
         input
       );
-      trace.push({ tool: tu.name, input, summary, result: result.slice(0, 300) });
+      // Keep retrieval results long enough that the x-ray's RAG panel can show the
+      // passages that were pulled; other tools stay tightly capped to keep the
+      // persisted trace small.
+      const cap = tu.name === "semantic_search" || tu.name === "search_files" ? 900 : 300;
+      trace.push({ tool: tu.name, input, summary, result: result.slice(0, cap) });
       onEvent?.({ type: "tool", name: tu.name, input, summary });
       toolResults.push({ type: "tool_result", tool_use_id: tu.id, content: result });
     }
@@ -388,4 +392,96 @@ export async function distillFacts(projectId: string, answers: { question: strin
   });
   const parsed = parseJsonObject<{ facts: string[] }>(textOf(response), { facts: [] });
   return Array.isArray(parsed.facts) ? parsed.facts.filter((f) => typeof f === "string" && f.trim()).map((f) => f.trim()) : [];
+}
+
+/* ---------------------------------------------------------------------------
+   inferNextActions — the "Compass". Levels the playing field: instead of leaving
+   the user to know what to ask, we read the real state (project, inherited
+   memory, corpus, recent activity) and infer WHERE this engagement is + the best
+   next moves. Two deliberate guards against funnelling the user down a wrong path:
+     • the STAGE is flexible (named to fit THIS project, not a fixed pipeline) and
+       carries a rationale, so it's legible and contestable, not silently decided;
+     • the ACTIONS are plural, diverse, and each grounded in a "why" — breadth,
+       not a single prescriptive path.
+   Also returns at most ONE proactive `offer` (something the agent could just do
+   now) for the bottom-right nudge — capped + dismissible by design.
+--------------------------------------------------------------------------- */
+
+export type NextAction = { title: string; prompt: string; why: string };
+export type NextActions = {
+  stage: { label: string; rationale: string };
+  actions: NextAction[];
+  offer: NextAction | null;
+};
+
+const EMPTY_NEXT: NextActions = { stage: { label: "", rationale: "" }, actions: [], offer: null };
+
+function compassCacheFile(projectId: string): string {
+  return path.join(process.cwd(), "workspace", "projects", projectId, "compass.json");
+}
+
+// `recent` = a compact digest of what the user has been doing (last few messages
+// + actions), assembled by the route. Cached against a signature of all inputs so
+// an unchanged state costs nothing; the state moves each turn, so it refreshes.
+export async function inferNextActions(projectId: string, user: string, recent: string): Promise<NextActions> {
+  const cfg = await getProjectConfig(projectId);
+  const memory = await inheritedMemoryLines(projectId, user);
+  const files = await listFiles(projectId).catch(() => [] as string[]);
+  const fileList = files.length ? files.join(", ") : "(no files yet)";
+
+  const sig = createHash("sha1").update(`${user}\n${memory}\n${fileList}\n${recent}`).digest("hex");
+  const cacheFile = compassCacheFile(projectId);
+  try {
+    const cached = JSON.parse(await fs.readFile(cacheFile, "utf8")) as NextActions & { sig?: string };
+    if (cached.sig === sig) return { stage: cached.stage, actions: cached.actions, offer: cached.offer ?? null };
+  } catch {
+    /* no cache yet */
+  }
+
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 1500, // room for stage + 3-4 full-sentence actions + an offer, so the JSON never truncates
+    system:
+      "You guide a consultant through a client engagement by inferring, from the real state below, WHERE the " +
+      "project is and the best next moves. Write for a non-technical reader. Return STRICT JSON: " +
+      `{"stage":{"label":string,"rationale":string},"actions":[{"title":string,"prompt":string,"why":string}],"offer":{"title":string,"prompt":string,"why":string}}. ` +
+      "stage.label = a SHORT phase name that fits THIS specific project — engagements vary hugely, so name whatever " +
+      "actually fits (e.g. 'Scoping', 'Stakeholder discovery', 'Diligence red-flags', 'Synthesis', 'Recommendation', " +
+      "'Board-ready') rather than forcing a fixed pipeline. stage.rationale = one plain sentence citing the signals. " +
+      "actions = 3-4 GENUINELY DIFFERENT next steps (not variants of one), each: title (imperative, ≤6 words), " +
+      "prompt (the exact message to send the agent), why (one short clause grounded in the state, e.g. 'the COO " +
+      "interview isn't synthesised yet'). offer = the SINGLE most useful thing the agent could just do now on the " +
+      "user's behalf (same shape), or null if nothing clearly warrants it. Be concrete and grounded in the inputs; " +
+      "never invent files or facts. JSON only, no preamble.",
+    messages: [
+      {
+        role: "user",
+        content:
+          `Project: ${cfg.name} — client "${cfg.client}", sector ${cfg.sector}, type ${cfg.type}, status ${cfg.status}.\n\n` +
+          `Files in the corpus: ${fileList}\n\n` +
+          `What the team already knows (inherited memory):\n${memory || "(none yet)"}\n\n` +
+          `Recent activity in this chat:\n${recent || "(nothing yet)"}\n\nJSON:`,
+      },
+    ],
+  });
+
+  const parsed = parseJsonObject<NextActions>(textOf(response), EMPTY_NEXT);
+  const cleanAction = (a: unknown): NextAction | null => {
+    const o = a as Partial<NextAction>;
+    return o && typeof o.title === "string" && typeof o.prompt === "string"
+      ? { title: o.title.trim(), prompt: o.prompt.trim(), why: typeof o.why === "string" ? o.why.trim() : "" }
+      : null;
+  };
+  const result: NextActions = {
+    stage: {
+      label: typeof parsed.stage?.label === "string" ? parsed.stage.label.trim() : "",
+      rationale: typeof parsed.stage?.rationale === "string" ? parsed.stage.rationale.trim() : "",
+    },
+    actions: Array.isArray(parsed.actions)
+      ? parsed.actions.map(cleanAction).filter((a): a is NextAction => a !== null).slice(0, 4)
+      : [],
+    offer: cleanAction(parsed.offer),
+  };
+  await fs.writeFile(cacheFile, JSON.stringify({ sig, ...result }, null, 2), "utf8").catch(() => {});
+  return result;
 }

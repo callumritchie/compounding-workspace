@@ -68,7 +68,8 @@ function Xray({
           {meta.trace.map((t, i) => (
             <div key={i} className="xray-tool">
               <div className="xray-tool-sum">{t.summary}</div>
-              {t.result && (
+              {/* semantic_search passages get their own RAG panel below — don't repeat them here */}
+              {t.result && t.tool !== "semantic_search" && (
                 <div className="xray-tool-res">
                   {t.result}
                   {t.result.length >= 300 ? "…" : ""}
@@ -78,6 +79,41 @@ function Xray({
           ))}
         </>
       )}
+      {/* RAG panel: make the vector-retrieval arm legible — the query, the passages
+          it pulled by meaning, and how close each was in embedding space. */}
+      {(() => {
+        const rag = (meta.trace ?? []).filter((t) => t.tool === "semantic_search");
+        if (rag.length === 0) return null;
+        return (
+          <>
+            <div className="xray-h">📚 RAG · retrieved by meaning ({rag.length})</div>
+            <div className="ctx-cap">
+              Vector search embeds your question and pulls the closest passages from the corpus, then a reranker keeps the
+              best — the RAG arm feeding this answer. “sim” = closeness in embedding space.
+            </div>
+            {rag.map((t, i) => {
+              const query = String((t.input as { query?: string })?.query ?? "");
+              const hits = (t.result ?? "").split("\n---\n").filter(Boolean);
+              return (
+                <div key={i} className="xray-rag">
+                  <div className="rag-q">🔍 “{query}”</div>
+                  {hits.map((h, j) => {
+                    const nl = h.indexOf("\n");
+                    const head = nl >= 0 ? h.slice(0, nl) : h;
+                    const body = nl >= 0 ? h.slice(nl + 1) : "";
+                    return (
+                      <div key={j} className="rag-hit">
+                        <div className="rag-hit-head">{head}</div>
+                        {body && <div className="rag-hit-body">{body.slice(0, 200)}{body.length > 200 ? "…" : ""}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </>
+        );
+      })()}
       {meta.injected && meta.injected.length > 0 && (
         <>
           <div className="xray-h">🧠 memory used ({meta.injected.length})</div>
@@ -197,6 +233,10 @@ type Nomination = {
   sourceClient: string;
   created: string;
 };
+// The "Compass": inferred engagement stage + diverse next-step suggestions + one
+// optional proactive offer (mirrors NextActions in lib/agent).
+type NextAction = { title: string; prompt: string; why: string };
+type NextActions = { stage: { label: string; rationale: string }; actions: NextAction[]; offer: NextAction | null };
 // An agent from the roster (the harness config).
 type AgentItem = {
   id: string;
@@ -259,6 +299,16 @@ export default function Home() {
   const [abstracts, setAbstracts] = useState<Record<string, { text: string; leak?: Leak }>>({});
 
   const [uploading, setUploading] = useState(false);
+
+  // ---- Proactive guidance ----
+  // Compass: stage + next-best-actions strip above the composer. Loaded fire-and-
+  // forget so it never blocks a turn; refreshed as the engagement moves.
+  const [nextActions, setNextActions] = useState<NextActions | null>(null);
+  const [compassDismissed, setCompassDismissed] = useState(false);
+  // Bottom-right proactive popup: which items the user has dismissed this session
+  // (keyed by a stable id), and whether the whole popup is collapsed.
+  const [popupDismissed, setPopupDismissed] = useState<Record<string, boolean>>({});
+  const [popupCollapsed, setPopupCollapsed] = useState(false);
 
   // ---- Warm start (cold-start activation) ----
   // On a "cold" project (no memory of its own yet) we proactively show what the
@@ -386,6 +436,47 @@ export default function Home() {
       .catch(() => setProposals([]));
   }
   useEffect(loadProposals, []);
+
+  // Load the Compass (stage + next-best-actions + one proactive offer) for the
+  // active chat. Fire-and-forget: the strip keeps showing the last set until this
+  // resolves, so it never blocks. Refreshed on chat/project change, after a turn,
+  // and after an upload — i.e. whenever the engagement state has moved.
+  function loadNextActions() {
+    if (!activeChat) return;
+    fetch(`/api/next-actions?project=${project}&user=${user}&chatId=${activeChat}`)
+      .then((r) => r.json())
+      .then((d) => setNextActions(d?.error ? null : { stage: d.stage ?? { label: "", rationale: "" }, actions: d.actions ?? [], offer: d.offer ?? null }))
+      .catch(() => {});
+  }
+
+  // Refresh the Compass whenever the engagement state has actually moved: a chat
+  // is opened with content, or a turn just finished (messages.length grows). Gated
+  // on !loading so it never fires mid-turn. Grounding it in messages.length is what
+  // makes the strip evolve as the project progresses.
+  useEffect(() => {
+    if (activeChat && messages.length > 0 && !loading) loadNextActions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChat, project, user, messages.length, loading]);
+
+  // Reset the guidance surfaces when switching chat or project so stale
+  // suggestions never linger and a re-dismissed strip can reappear.
+  useEffect(() => {
+    setNextActions(null);
+    setCompassDismissed(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChat, project]);
+
+  // Open the Memory manager on its Pending tab — the full workbench for the richer
+  // promote / generalise flow the popup links out to.
+  function openPending() {
+    loadMemories();
+    loadProposals();
+    loadPromotions();
+    loadSignals();
+    loadLifecycle();
+    setMemView("pending");
+    setShowMemory(true);
+  }
 
   // Load the agent roster + the tool catalogue (for the harness modal).
   function loadAgents() {
@@ -750,6 +841,7 @@ export default function Home() {
       if (sug && ((sug.questions?.length ?? 0) > 0 || (sug.gaps?.length ?? 0) > 0)) {
         setUploadSuggestions({ questions: sug.questions ?? [], gaps: sug.gaps ?? [] });
       }
+      loadNextActions(); // a new file moves the engagement — refresh the guidance
     } finally {
       setUploading(false);
       e.target.value = "";
@@ -1161,6 +1253,42 @@ export default function Home() {
               )}
               <div ref={messagesEndRef} />
             </div>
+            {/* Compass: always-on, stage-aware next-best-actions. Shown once a chat
+                is underway (the empty state keeps the kickoff card). Plural + diverse
+                + each grounded in a "why" — guidance without funnelling. Collapsing
+                it leaves a slim pill so it can always be brought back. */}
+            {nextActions && messages.length > 0 && nextActions.actions.length > 0 && (
+              compassDismissed ? (
+                <button className="compass-reopen" onClick={() => setCompassDismissed(false)}>
+                  💡 Suggested next steps{nextActions.stage.label ? ` · ${nextActions.stage.label}` : ""} ▸
+                </button>
+              ) : (
+                <div className="compass">
+                  <div className="compass-head">
+                    {nextActions.stage.label && (
+                      <span className="compass-stage" title={nextActions.stage.rationale}>
+                        📍 {nextActions.stage.label}
+                      </span>
+                    )}
+                    <span className="compass-label">Suggested next steps</span>
+                    <button className="ic-x" title="collapse (click the pill to bring it back)" onClick={() => setCompassDismissed(true)}>×</button>
+                  </div>
+                  <div className="compass-chips">
+                    {nextActions.actions.map((a, i) => (
+                      <button
+                        key={i}
+                        className="guide-send compass-chip"
+                        disabled={loading || !activeChat}
+                        title={a.why ? `Why: ${a.why}` : undefined}
+                        onClick={() => sendText(a.prompt)}
+                      >
+                        ▸ {a.title}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+            )}
             <div className="composer">
               <textarea
                 value={input}
@@ -1205,6 +1333,78 @@ export default function Home() {
           </div>
         </div>
       </div>
+
+      {/* ---- Proactive popup (bottom-right): the agent initiates ----
+          Surfaces things that need the user — pending approvals (today buried in
+          the Memory manager) + at most ONE proactive offer. A corner toast: it
+          never interrupts typing, and every item is dismissible. */}
+      {(() => {
+        const offer = nextActions?.offer ?? null;
+        const offerId = offer ? `offer:${offer.title}` : "";
+        const showOffer = !!offer && !popupDismissed[offerId];
+        const props = proposals.filter((p) => !popupDismissed[p.id]);
+        const noms = nominations.filter((n) => !popupDismissed[n.id]);
+        const count = (showOffer ? 1 : 0) + props.length + noms.length;
+        // Hide during a guided scenario — the scenario guide owns the bottom-right.
+        if (count === 0 || activeScenario) return null;
+        return (
+          <div className="nudge">
+            <div className="nudge-head">
+              <span>🔔 The agent has {count} {count === 1 ? "thing" : "things"} for you</span>
+              <button className="ic-x" title={popupCollapsed ? "expand" : "collapse"} onClick={() => setPopupCollapsed((c) => !c)}>
+                {popupCollapsed ? "▸" : "▾"}
+              </button>
+            </div>
+            {!popupCollapsed && (
+              <div className="nudge-body">
+                {showOffer && offer && (
+                  <div className="nudge-item offer">
+                    <div className="nudge-kind">💡 I can do this now</div>
+                    <div className="nudge-title">{offer.title}</div>
+                    {offer.why && <div className="nudge-why">{offer.why}</div>}
+                    <div className="nudge-actions">
+                      <button
+                        className="promote"
+                        disabled={loading || !activeChat}
+                        onClick={() => { setPopupDismissed((s) => ({ ...s, [offerId]: true })); sendText(offer.prompt); }}
+                      >
+                        Do it
+                      </button>
+                      <button className="ghost" onClick={() => setPopupDismissed((s) => ({ ...s, [offerId]: true }))}>Not now</button>
+                    </div>
+                  </div>
+                )}
+                {props.map((p) => (
+                  <div key={p.id} className="nudge-item">
+                    <div className="nudge-kind">💡 Save to the team’s memory?</div>
+                    <div className="nudge-title">“{p.fact}”</div>
+                    <div className="nudge-why">{p.scope} · suggested by {p.proposedBy}</div>
+                    <div className="nudge-actions">
+                      {canApproveScope(user, p.scope) ? (
+                        <button className="promote" onClick={() => { approveProp(p.id); setPopupDismissed((s) => ({ ...s, [p.id]: true })); }}>Approve</button>
+                      ) : (
+                        <span className="lock-note">🔒 needs a Lead</span>
+                      )}
+                      <button className="ghost" onClick={() => { dismissProp(p.id); setPopupDismissed((s) => ({ ...s, [p.id]: true })); }}>Dismiss</button>
+                    </div>
+                  </div>
+                ))}
+                {noms.map((n) => (
+                  <div key={n.id} className="nudge-item">
+                    <div className="nudge-kind">⬆ Promote a lesson?</div>
+                    <div className="nudge-title">“{n.fact}”</div>
+                    <div className="nudge-why">to {n.targetScope} · needs generalising first</div>
+                    <div className="nudge-actions">
+                      <button className="promote" onClick={openPending}>Review</button>
+                      <button className="ghost" onClick={() => setPopupDismissed((s) => ({ ...s, [n.id]: true }))}>Later</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
 
       {/* ---- Guided scenarios: launcher + running guide panel ---- */}

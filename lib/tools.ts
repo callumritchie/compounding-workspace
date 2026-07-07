@@ -167,7 +167,10 @@ export async function executeTool(
         const pool = await search(q, projectId, 8);
         const order = pool.length ? await rerank(q, pool.map((h) => h.text), 4) : [];
         const hits = order.map((i) => pool[i]);
-        const text = hits.map((h) => `${h.file}: ${h.text}`).join("\n---\n");
+        // One passage per hit, headed by its source file + vector similarity, so
+        // both the model and the x-ray's RAG panel can see WHAT was retrieved and
+        // HOW close it was in embedding space (before reranking picked the best).
+        const text = hits.map((h) => `[sim ${Math.round(h.score * 100)}%] ${h.file}\n${h.text}`).join("\n---\n");
         return {
           result: text || "(no matches — the vector index may be empty; run `npm run index`)",
           summary: `semantic_search "${q}" → ${hits.length} best of ${pool.length}`,
