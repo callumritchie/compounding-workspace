@@ -1,81 +1,138 @@
 /* ---------------------------------------------------------------------------
-   vectors.ts — the vector store, kept as simple as possible on purpose.
+   vectors.ts — the vector store, now a real embedded vector database.
 
-   It's just a JSON array of {file, text, embedding}, and search is a plain
-   brute-force cosine comparison you can read in one function. At demo scale
-   (hundreds of chunks) this is instant and completely legible — no database,
-   no black box. (The "one notch up" would be sqlite-vec; same idea, on disk.)
+   This is the RAG arm: corpus text is chunked, embedded, and PULLED on demand by
+   similarity (the opposite of memory, which is pushed in every turn). It used to
+   be a JSON file scanned by brute force; it's now sqlite-vec — a SQLite extension
+   that stores the vectors on disk and does the nearest-neighbour search + metadata
+   filtering inside the database. Still one local file, no server, no API key — but
+   it's how production RAG actually works: an ANN index you query, not a blob you
+   load into memory. The store lives at workspace/index/vectors.db.
 
-   This is the RAG arm: text is chunked, embedded, and PULLED on demand by
-   similarity — the opposite of memory, which is pushed in every turn.
+   The public surface (search / addFileToIndex / buildIndex / cosine) is unchanged,
+   so everything above it — the semantic_search tool, uploads, the eval — is
+   untouched by the swap.
 --------------------------------------------------------------------------- */
 
+import Database from "better-sqlite3";
+import * as sqliteVec from "sqlite-vec";
 import { promises as fs } from "fs";
 import path from "path";
 import { listProjects, listFiles, readFile } from "./corpus";
 import { chunkText } from "./chunk";
 import { embed, embedOne } from "./embed";
 
-const INDEX = path.join(process.cwd(), "workspace", "index", "vectors.json");
+const DB_PATH = path.join(process.cwd(), "workspace", "index", "vectors.db");
+const DIM = 384; // all-MiniLM-L6-v2 (see embed.ts)
 
-export type IndexedChunk = { id: string; project: string; file: string; text: string; embedding: number[] };
 export type SearchResult = { file: string; text: string; score: number };
 
-// Cosine similarity. Vectors are already unit-length (see embed.ts), so this
-// dot product IS the cosine.
+// Cosine similarity of two vectors. Kept as a plain exported helper because the
+// MEMORY subsystem (lib/assemble ranking, lib/lifecycle dedupe) uses it directly
+// over its own in-memory embeddings — that's separate from this corpus DB.
+// Embeddings from embed.ts are unit length, so the dot product IS the cosine.
 export function cosine(a: number[], b: number[]): number {
   let s = 0;
   for (let i = 0; i < a.length; i++) s += a[i] * b[i];
   return s;
 }
 
-export async function loadIndex(): Promise<IndexedChunk[]> {
-  try {
-    return JSON.parse(await fs.readFile(INDEX, "utf8")) as IndexedChunk[];
-  } catch {
-    return [];
-  }
+// One connection per process, opened lazily. Loads the sqlite-vec extension and
+// creates the table on first use. The vec0 virtual table holds the embedding plus
+// metadata columns (project, file — filterable inside a KNN query) and an
+// auxiliary text column (returned with results, prefixed "+"). cosine distance so
+// score = 1 - distance lands in [0, 1] (the x-ray's "sim %").
+let _db: Database.Database | null = null;
+function getDb(): Database.Database {
+  if (_db) return _db;
+  const db = new Database(DB_PATH);
+  sqliteVec.load(db);
+  db.exec(
+    `CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
+       chunk_id TEXT PRIMARY KEY,
+       project TEXT,
+       file TEXT,
+       +text TEXT,
+       embedding float[${DIM}] distance_metric=cosine
+     );`
+  );
+  _db = db;
+  return db;
 }
 
-async function saveIndex(chunks: IndexedChunk[]): Promise<void> {
-  await fs.mkdir(path.dirname(INDEX), { recursive: true });
-  await fs.writeFile(INDEX, JSON.stringify(chunks), "utf8");
+// sqlite-vec accepts an embedding as a JSON array string — legible, and plenty
+// fast at this scale (a Float32 BLOB is the perf alternative if the corpus grows).
+function encode(vec: number[]): string {
+  return JSON.stringify(vec);
 }
 
-// Chunk + embed one file into indexed chunks.
-async function chunkAndEmbed(project: string, file: string): Promise<IndexedChunk[]> {
+// Chunk + embed one file into rows ready to insert.
+type Row = { chunk_id: string; project: string; file: string; text: string; embedding: string };
+async function chunkAndEmbed(project: string, file: string): Promise<Row[]> {
   const pieces = chunkText(await readFile(project, file));
   const embeddings = await embed(pieces);
-  return pieces.map((text, i) => ({ id: `${project}:${file}#${i}`, project, file, text, embedding: embeddings[i] }));
+  return pieces.map((text, i) => ({
+    chunk_id: `${project}:${file}#${i}`,
+    project,
+    file,
+    text,
+    embedding: encode(embeddings[i]),
+  }));
+}
+
+// Ensure the directory exists before better-sqlite3 opens the file.
+async function ensureDir(): Promise<void> {
+  await fs.mkdir(path.dirname(DB_PATH), { recursive: true });
+}
+
+function insertRows(db: Database.Database, rows: Row[]): void {
+  const stmt = db.prepare(
+    "INSERT INTO vec_chunks(chunk_id, project, file, text, embedding) VALUES (@chunk_id, @project, @file, @text, @embedding)"
+  );
+  const tx = db.transaction((rs: Row[]) => rs.forEach((r) => stmt.run(r)));
+  tx(rows);
 }
 
 // Rebuild the whole index from every file in every project.
 export async function buildIndex(): Promise<number> {
-  const all: IndexedChunk[] = [];
+  await ensureDir();
+  const db = getDb();
+  db.exec("DELETE FROM vec_chunks;");
+  let total = 0;
   for (const project of await listProjects()) {
     for (const file of await listFiles(project)) {
-      all.push(...(await chunkAndEmbed(project, file)));
+      const rows = await chunkAndEmbed(project, file);
+      insertRows(db, rows);
+      total += rows.length;
     }
   }
-  await saveIndex(all);
-  return all.length;
+  return total;
 }
 
-// Add (or replace) one file in the index — used after an upload.
+// Add (or replace) one file in the index — used after an upload. An upsert:
+// drop the file's old chunks, insert the fresh ones.
 export async function addFileToIndex(project: string, file: string): Promise<number> {
-  const kept = (await loadIndex()).filter((c) => !(c.project === project && c.file === file));
-  const fresh = await chunkAndEmbed(project, file);
-  await saveIndex([...kept, ...fresh]);
-  return fresh.length;
+  await ensureDir();
+  const db = getDb();
+  db.prepare("DELETE FROM vec_chunks WHERE project = ? AND file = ?").run(project, file);
+  const rows = await chunkAndEmbed(project, file);
+  insertRows(db, rows);
+  return rows.length;
 }
 
-// Brute-force top-k search within one project.
+// Top-k semantic search within one project. The KNN + project filter both run
+// inside the database now (no load-everything-then-filter). distance is cosine
+// distance, so score = 1 - distance is the similarity in [0, 1].
 export async function search(query: string, project: string, k = 5): Promise<SearchResult[]> {
-  const index = (await loadIndex()).filter((c) => c.project === project);
-  if (index.length === 0) return [];
-  const q = await embedOne(query);
-  return index
-    .map((c) => ({ file: c.file, text: c.text, score: cosine(q, c.embedding) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, k);
+  await ensureDir();
+  const db = getDb();
+  const q = encode(await embedOne(query));
+  const rows = db
+    .prepare(
+      `SELECT file, text, distance FROM vec_chunks
+       WHERE embedding MATCH ? AND k = ? AND project = ?
+       ORDER BY distance`
+    )
+    .all(q, k, project) as { file: string; text: string; distance: number }[];
+  return rows.map((r) => ({ file: r.file, text: r.text, score: 1 - r.distance }));
 }
