@@ -6,7 +6,7 @@
 */
 
 import { getNomination, leakCheck } from "@/lib/promotion";
-import { abstractLesson } from "@/lib/agent";
+import { abstractLesson, leakCheckLLM } from "@/lib/agent";
 
 export async function POST(req: Request) {
   const { id } = await req.json().catch(() => ({}));
@@ -22,6 +22,15 @@ export async function POST(req: Request) {
     return Response.json({ error: detail }, { status: 500 });
   }
 
-  const leak = leakCheck(abstracted, [nom.sourceClient, nom.sourceProject]);
+  // Two-layer leak check: the cheap substring pre-filter catches literal client
+  // terms; the LLM pass catches paraphrases + structural identifiers (a distinctive
+  // metric, a named person, a one-of-a-kind strategy) that substring can't see.
+  const substring = leakCheck(abstracted, [nom.sourceClient, nom.sourceProject]);
+  const llm = await leakCheckLLM(abstracted, nom.sourceClient);
+  const leak = {
+    flagged: substring.flagged || llm.flagged,
+    hits: substring.hits,
+    reasons: llm.reasons,
+  };
   return Response.json({ abstracted, leak });
 }

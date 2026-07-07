@@ -314,6 +314,30 @@ export async function listAllMemories(): Promise<Memory[]> {
   return rows.map(rowToMemory);
 }
 
+// The audit trail for one memory: every create/update/retract/delete/graduate/
+// decay logged against it, newest first. This is what makes a shared memory
+// accountable — you can see who changed what, and when.
+export type AuditEntry = { ts: string; actor: string | null; action: string; detail: unknown };
+export async function memoryHistory(scope: string, id: string): Promise<AuditEntry[]> {
+  await ensureSeeded();
+  const rows = getDb()
+    .prepare("SELECT ts, actor, action, detail FROM audit_log WHERE memory_id = ? AND scope = ? ORDER BY id DESC")
+    .all(id, scope) as { ts: string; actor: string | null; action: string; detail: string | null }[];
+  return rows.map((r) => ({
+    ts: r.ts,
+    actor: r.actor,
+    action: r.action,
+    detail: r.detail ? safeParse(r.detail) : null,
+  }));
+}
+function safeParse(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return s;
+  }
+}
+
 // Record that these memories were actually injected this turn: bump use_count and
 // stamp last_used. This is the USAGE signal — it powers "most-used" sorting and
 // staleness detection. It deliberately does NOT touch importance (usage is not
