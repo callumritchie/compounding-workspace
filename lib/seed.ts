@@ -14,7 +14,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import matter from "gray-matter";
-import { getDb, encodeVec, vid, isEmpty } from "./db";
+import { getDb, encodeVec, vid, isEmpty, audit } from "./db";
 import { embed } from "./embed";
 
 const MEM_ROOT = path.join(process.cwd(), "workspace", "memory");
@@ -73,7 +73,11 @@ async function collectSeedFiles(): Promise<SeedMem[]> {
         used_since_provisional: typeof data.used_since_provisional === "number" ? data.used_since_provisional : 0,
         use_count: typeof data.use_count === "number" ? data.use_count : 0,
         last_used: data.last_used ? String(data.last_used) : null,
-        last_reinforced: data.last_reinforced ? String(data.last_reinforced) : null,
+        // Seeding is an authored confirmation, so treat "now" as the last time the
+        // seed was reinforced. Without this, seeds with old provenance dates would
+        // decay immediately on first manager-open (see decayMemories). Keeps `created`
+        // faithful to provenance while starting the decay clock at import time.
+        last_reinforced: data.last_reinforced ? String(data.last_reinforced) : new Date().toISOString().slice(0, 10),
         created: prov.created ? String(prov.created) : null,
       });
     }
@@ -138,6 +142,8 @@ async function importMemories(mems: SeedMem[]): Promise<void> {
     mems.forEach((m, i) => {
       memStmt.run(m);
       vecStmt.run(vid(m.scope, m.id), m.scope, encodeVec(vectors[i]));
+      // Give every memory a first history entry so its audit trail isn't empty.
+      audit(db, { actor: "seed", action: "seed", scope: m.scope, memoryId: m.id, detail: { importance: m.importance, status: m.status } });
     });
   })();
 }
