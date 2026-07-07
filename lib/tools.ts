@@ -14,6 +14,7 @@ import { addNomination } from "./promotion";
 import { addProposal } from "./proposals";
 import { noteSignal } from "./signals";
 import { search } from "./vectors";
+import { rerank } from "./rerank";
 import { getProjectConfig } from "./project";
 
 // The schemas Claude receives. Descriptions matter — they tell the model when
@@ -46,7 +47,7 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "semantic_search",
     description:
-      "Search the corpus by MEANING (vector search), not exact words. Returns the most semantically similar passages. Use when the user's wording may differ from the documents' (e.g. 'willingness to pay' vs 'pricing sensitivity'), or to find where a concept is discussed across files.",
+      "Search the corpus by MEANING (vector search + reranking), not exact words. Casts a wide net, then reranks to the passages that best answer your query. Prefer this for conceptual questions or when the user's wording may differ from the documents' (e.g. 'willingness to pay' vs 'pricing sensitivity'), or to find where an idea is discussed across files. Use search_files instead for exact names, figures, or literal phrases.",
     input_schema: {
       type: "object",
       properties: { query: { type: "string", description: "What you're looking for, in your own words" } },
@@ -160,11 +161,16 @@ export async function executeTool(
       }
       case "semantic_search": {
         const q = String(input.query ?? "");
-        const hits = await search(q, projectId, 5);
-        const text = hits.map((h) => `[${h.score.toFixed(2)}] ${h.file}: ${h.text}`).join("\n---\n");
+        // Cast a wide net (top-8 by vector similarity), then let the reranker
+        // pick the passages that actually answer the query, best first. This is
+        // the single, opinionated retrieval path — no comparison view needed.
+        const pool = await search(q, projectId, 8);
+        const order = pool.length ? await rerank(q, pool.map((h) => h.text), 4) : [];
+        const hits = order.map((i) => pool[i]);
+        const text = hits.map((h) => `${h.file}: ${h.text}`).join("\n---\n");
         return {
           result: text || "(no matches — the vector index may be empty; run `npm run index`)",
-          summary: `semantic_search "${q}" → ${hits.length} hits`,
+          summary: `semantic_search "${q}" → ${hits.length} best of ${pool.length}`,
         };
       }
       case "write_file": {

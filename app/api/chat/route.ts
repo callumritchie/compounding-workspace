@@ -69,8 +69,10 @@ export async function POST(req: Request) {
   const agentTools = agent.tools?.length ? TOOLS.filter((t) => agent.tools.includes(t.name)) : TOOLS;
 
   // Assemble memory (labelled, split into cache-stable + query-ranked tiers).
+  // Passing the message lets the ranked tier prioritise memories relevant to THIS
+  // question when there are too many to fit (see assembleContext).
   const memories = await getMemoriesForContext(user, project);
-  const assembled = assembleContext(memories, workingContext);
+  const assembled = await assembleContext(memories, workingContext, message);
 
   // Break the input prompt into parts for the composition bar.
   const priorHistory = history.slice(0, -1).map((m) => m.content).join("\n");

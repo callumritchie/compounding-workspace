@@ -117,21 +117,7 @@ html, body {
   border: 1px solid #f3c9b5; border-radius: 8px; padding: 6px 10px;
 }
 
-/* Retrieval comparison */
 .modal.wide { width: min(1000px, 100%); }
-.compare-input { display: flex; gap: 8px; margin-bottom: 6px; }
-.compare-input input {
-  flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 14px;
-}
-.compare-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 12px; }
-@media (max-width: 760px) { .compare-grid { grid-template-columns: 1fr; } }
-.compare-col { border: 1px solid var(--border); border-radius: 8px; padding: 10px; min-width: 0; }
-.compare-h { font-weight: 600; font-size: 13px; margin-bottom: 8px; color: var(--accent); }
-.compare-chunk { font-size: 11px; line-height: 1.4; margin-bottom: 6px; word-break: break-word; }
-.compare-chunk code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
-.chunk-score { display: inline-block; background: var(--accent-soft); color: var(--accent); border-radius: 4px; padding: 0 4px; font-weight: 600; margin-right: 3px; }
-.chunk-text { color: var(--muted); }
-.compare-answer { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; font-size: 13px; line-height: 1.5; }
 
 /* Signal ledger (in the modal) */
 .signals { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px dashed var(--border); }
@@ -269,16 +255,9 @@ html, body {
   padding: 0 16px; cursor: pointer; font-weight: 600;
 }
 .composer button:disabled { opacity: 0.5; cursor: default; }
-/* Secondary composer action: inline retrieval comparison */
-.composer button.compare-btn { background: var(--panel); color: var(--ink); border: 1px solid var(--border); font-weight: 600; white-space: nowrap; }
-.composer button.compare-btn:hover:not(:disabled) { background: var(--bg); }
-/* Inline "compare retrieval" card, shown in the thread */
-.inline-compare { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--bg); }
-.ic-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+/* Small dismiss "×" used on the kickoff / upload-suggestion cards */
 .ic-x { border: none; background: transparent; cursor: pointer; font-size: 16px; line-height: 1; color: var(--muted); padding: 0 4px; }
 .ic-x:hover { color: var(--ink); }
-.ic-q { font-size: 13px; font-weight: 600; margin: 6px 0 2px; }
-.inline-compare .compare-grid { grid-template-columns: 1fr; gap: 10px; margin-top: 10px; }
 
 /* ---- File list, viewer & glass-box ---- */
 .upload {
@@ -343,12 +322,6 @@ html, body {
 .mem-inj-scope { font-size: 11px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; }
 .mem-inj-tok { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
 .mem-inj-text { font-size: 12px; line-height: 1.5; margin-top: 4px; }
-.feedback { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-.feedback button {
-  border: 1px solid var(--border); background: var(--bg); border-radius: 6px;
-  padding: 3px 10px; cursor: pointer; font-size: 12px;
-}
-.feedback button:hover { border-color: var(--accent); }
 
 /* Agent roster (the harness) */
 .agent-pick { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 12px; }

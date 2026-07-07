@@ -15,11 +15,21 @@
       Ordering stable→volatile is what lets prompt-caching actually work.
 
    Each tier has a TOKEN BUDGET; if it overflows we drop the lowest-ranked
-   items and record why (shown in the glass box). Ranking here is deliberately
-   "dumb" — just importance — until the eval harness shows we need more.
+   items and record why (shown in the glass box).
+
+   RANKING, at scale: the STABLE tier is always importance-ordered — it must stay
+   query-independent so prompt-caching works. The RANKED tier is the query-ranked
+   one: while everything fits, importance order is fine (and identical to before);
+   but once there are enough memories that the ranked tier OVERFLOWS its budget,
+   we reorder it by RELEVANCE to the current question (embedding similarity) so the
+   memories that actually answer *this* question survive the cut — not merely the
+   highest-importance ones. This is what makes memory hold up with lots and lots
+   of memories. Falls back to importance if no query or the embedder is unavailable.
 --------------------------------------------------------------------------- */
 
 import type { Memory, MemoryType } from "./memory";
+import { embed, embedOne } from "./embed";
+import { cosine } from "./vectors";
 
 // Rough token estimate (~4 chars/token). Good enough for budgeting; the glass
 // box shows the REAL token counts from the API response for cost/caching.
@@ -89,7 +99,40 @@ function fitToBudget(
   return lines;
 }
 
-export function assembleContext(memories: Memory[], workingContext: string): AssembledContext {
+// Rough token estimate of the line a memory becomes, matching fitToBudget.
+function lineTokens(m: Memory): number {
+  return estimateTokens(`- ${label(m)}: ${m.body}`);
+}
+
+// Reorder the ranked-tier memories by relevance to the query — but only when it
+// matters (the tier overflows its budget) and only if we have a query and a
+// working embedder. Otherwise keep the importance order (byImportance already
+// applied), so small libraries behave exactly as before and the hot path stays
+// free of embedding calls.
+async function orderRankedByRelevance(
+  rankedMems: Memory[],
+  query: string | undefined,
+  budget: number
+): Promise<Memory[]> {
+  const totalTokens = rankedMems.reduce((s, m) => s + lineTokens(m), 0);
+  if (!query || rankedMems.length < 2 || totalTokens <= budget) return rankedMems;
+  try {
+    const [qvec, bodyVecs] = await Promise.all([embedOne(query), embed(rankedMems.map((m) => m.body))]);
+    const scored = rankedMems.map((m, i) => ({ m, rel: cosine(qvec, bodyVecs[i]) }));
+    // Relevance first; importance breaks ties so equally-relevant items keep a
+    // sensible order.
+    scored.sort((a, b) => (b.rel - a.rel) || (b.m.importance - a.m.importance));
+    return scored.map((s) => s.m);
+  } catch {
+    return rankedMems; // embedder/index unavailable → importance order stands
+  }
+}
+
+export async function assembleContext(
+  memories: Memory[],
+  workingContext: string,
+  query?: string
+): Promise<AssembledContext> {
   // Provisional memory always rides in the ranked (non-cached, "verify before
   // relying") tier, regardless of importance — it isn't trusted enough to cache.
   const isStable = (m: Memory) =>
@@ -97,7 +140,11 @@ export function assembleContext(memories: Memory[], workingContext: string): Ass
   const byImportance = (a: Memory, b: Memory) => b.importance - a.importance;
 
   const stableMems = memories.filter(isStable).sort(byImportance);
-  const rankedMems = memories.filter((m) => !isStable(m)).sort(byImportance);
+  const rankedMems = await orderRankedByRelevance(
+    memories.filter((m) => !isStable(m)).sort(byImportance),
+    query,
+    BUDGETS.ranked
+  );
 
   const injected: InjectedItem[] = [];
   const dropped: DroppedItem[] = [];

@@ -43,15 +43,13 @@ type ContextReport = {
 };
 
 // The per-message "X-ray": everything that informed a given answer — reasoning,
-// tools + retrieved passages, memory used (with retract), the input-composition
-// bar, tokens, and 👍/👎 feedback (all folded in from the old glass box).
+// tools + retrieved passages, memory used (with retract), the context-window
+// composition bar, and tokens (all folded in from the old glass box).
 function Xray({
   meta,
-  onFeedback,
   onRetract,
 }: {
   meta: MessageMeta;
-  onFeedback: (v: "good" | "bad") => Promise<string>;
   onRetract: (scope: string, id: string) => Promise<string>;
 }) {
   const [note, setNote] = useState<string | null>(null);
@@ -113,9 +111,14 @@ function Xray({
       {meta.composition && meta.composition.length > 0 && (() => {
         const parts = meta.composition!;
         const total = parts.reduce((s, p) => s + p.tokens, 0) || 1;
+        const pct = (total / CONTEXT_WINDOW) * 100;
         return (
           <>
-            <div className="xray-h">input composition (~{total}t)</div>
+            <div className="xray-h">📦 context window — everything the model sees this turn (~{total.toLocaleString()}t)</div>
+            <div className="ctx-cap">
+              Assembled fresh every turn from these parts. 🔒 parts are cached and reused cheaply; the rest is
+              rebuilt each time.
+            </div>
             <div className="tokbar">
               {parts.map((p, i) => (
                 <div
@@ -134,30 +137,32 @@ function Xray({
                 </span>
               ))}
             </div>
+            <div className="ctx-item muted">
+              Using ~{total.toLocaleString()} of {CONTEXT_WINDOW.toLocaleString()} tokens
+              {pct < 1 ? " (well under 1%" : ` (~${pct.toFixed(pct < 10 ? 1 : 0)}%`} of the window) — lots of room to grow.
+            </div>
           </>
         );
       })()}
       {meta.usage && (
         <>
-          <div className="xray-h">tokens</div>
+          <div className="xray-h">tokens (actual, from the API)</div>
           <div className="ctx-item">
             input {meta.usage.input} · cache-read {meta.usage.cacheRead} · output {meta.usage.output}
           </div>
         </>
       )}
-      <div className="xray-h">was this answer right?</div>
-      <div className="feedback">
-        <button onClick={async () => setNote(await onFeedback("good"))}>👍 good</button>
-        <button onClick={async () => setNote(await onFeedback("bad"))}>👎 off</button>
-      </div>
       {note && <div className="ctx-item muted">{note}</div>}
     </div>
   );
 }
 
-// Fixed palette so each input-composition segment keeps the same colour
-// between the bar and its legend.
+// Fixed palette so each context-window segment keeps the same colour between the
+// bar and its legend.
 const COMP_COLORS = ["#6366f1", "#8b5cf6", "#0ea5e9", "#f59e0b", "#10b981", "#ef4444", "#ec4899"];
+// Claude Opus 4.8's context window — used to show how much of it this turn fills,
+// so "context window" is a concrete size, not an abstraction.
+const CONTEXT_WINDOW = 200_000;
 
 // One chat tab's metadata (mirrors lib/workspace ChatMeta).
 type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessage?: string; openFile?: string | null; agentId?: string; projectId?: string };
@@ -218,12 +223,6 @@ function canApproveScope(u: string, scope: string): boolean {
   if (["stakeholder", "client", "sector", "company"].includes(level)) return CLIENT_ROLES[u] === "lead";
   return CLIENT_ROLES[u] === "lead";
 }
-type Chunk = { file: string; text: string; score: number };
-type CompareResult = {
-  naive: { chunks: Chunk[]; answer: string };
-  reranked: { chunks: Chunk[]; answer: string };
-  agentic: { answer: string; trace: TraceEntry[] };
-};
 type Leak = { flagged: boolean; hits: string[] };
 type Signal = {
   pattern: string;
@@ -259,9 +258,6 @@ export default function Home() {
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [abstracts, setAbstracts] = useState<Record<string, { text: string; leak?: Leak }>>({});
 
-  const [comparing, setComparing] = useState(false);
-  // Ephemeral "compare retrieval" card shown inline in the thread (not persisted).
-  const [inlineCompare, setInlineCompare] = useState<{ question: string; result: CompareResult } | null>(null);
   const [uploading, setUploading] = useState(false);
 
   // ---- Warm start (cold-start activation) ----
@@ -290,6 +286,10 @@ export default function Home() {
   const [memStatusFilter, setMemStatusFilter] = useState("all");
   const [memTypeFilter, setMemTypeFilter] = useState("all");
   const [memSort, setMemSort] = useState<"priority" | "used" | "newest">("priority");
+  // At scale the library collapses each lattice level to its header; open one to
+  // browse it. `showAllInLevel` lifts the per-level render cap for a given level.
+  const [openLevels, setOpenLevels] = useState<Record<string, boolean>>({});
+  const [showAllInLevel, setShowAllInLevel] = useState<Record<string, boolean>>({});
   const [lifecycle, setLifecycle] = useState<{ stale: StaleItem[]; duplicates: DupPair[] }>({ stale: [], duplicates: [] });
   // Guided scenario demo mode.
   const [showScenarios, setShowScenarios] = useState(false);
@@ -598,24 +598,6 @@ export default function Home() {
     if (d.ok) { setNominations((ns) => ns.filter((n) => n.id !== id)); loadMemories(); }
   }
 
-  // Run the retrieval comparison for whatever's in the composer, inline in the thread.
-  async function runCompare() {
-    const q = input.trim();
-    if (!q || comparing) return;
-    setComparing(true);
-    setInlineCompare(null);
-    try {
-      const d = await fetch("/api/compare", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q, project }),
-      }).then((r) => r.json());
-      if (!d.error) setInlineCompare({ question: q, result: d });
-    } finally {
-      setComparing(false);
-    }
-  }
-
   async function doReject(id: string) {
     const d = await fetch("/api/promotions/reject", {
       method: "POST",
@@ -903,23 +885,6 @@ export default function Home() {
     }
   }
 
-  // Correctness feedback → reinforce the learned memories behind this answer.
-  // 👍/👎 on a specific answer → reinforce the LEARNED memories that informed it
-  // (reinforcement keys off correctness, not usage; constitution is never nudged).
-  async function feedbackForMessage(meta: MessageMeta, verdict: "good" | "bad"): Promise<string> {
-    const items = (meta.injected ?? [])
-      .filter((m) => m.type === "learned")
-      .map((m) => ({ scope: m.scope, id: m.id, type: m.type }));
-    if (items.length === 0) return "no learned memories to nudge (constitution is fixed).";
-    const r = await fetch("/api/feedback", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ verdict, items }),
-    }).then((res) => res.json());
-    const dir = verdict === "good" ? "↑" : "↓";
-    return `${r.changed ?? 0} learned ${r.changed === 1 ? "memory" : "memories"} nudged ${dir} (constitution untouched).`;
-  }
-
   // Archive a memory (contest it) so the agent stops using it.
   async function retractInXray(scope: string, id: string): Promise<string> {
     await fetch("/api/memory/retract", {
@@ -1137,11 +1102,7 @@ export default function Home() {
                             {xray[i] ? "▾ hide x-ray" : "▸ x-ray — what informed this answer"}
                           </button>
                           {xray[i] && (
-                            <Xray
-                              meta={m.meta}
-                              onFeedback={(v) => feedbackForMessage(m.meta!, v)}
-                              onRetract={retractInXray}
-                            />
+                            <Xray meta={m.meta} onRetract={retractInXray} />
                           )}
                         </div>
                       )}
@@ -1180,42 +1141,6 @@ export default function Home() {
                       </div>
                     );
                   })}
-              {inlineCompare && (
-                <div className="msg assistant">
-                  <div className="role">retrieval comparison</div>
-                  <div className="inline-compare">
-                    <div className="ic-head">
-                      <span>Same question, three ways to fetch context · <b>{project}</b></span>
-                      <button className="ic-x" title="dismiss" onClick={() => setInlineCompare(null)}>×</button>
-                    </div>
-                    <div className="ic-q">“{inlineCompare.question}”</div>
-                    <div className="compare-grid">
-                      {(["naive", "reranked", "agentic"] as const).map((mode) => (
-                        <div key={mode} className="compare-col">
-                          <div className="compare-h">
-                            {mode === "naive" ? "Naïve vector" : mode === "reranked" ? "Reranked vector" : "Agentic"}
-                          </div>
-                          {mode !== "agentic" &&
-                            inlineCompare.result[mode].chunks.map((c, i) => (
-                              <div key={i} className="compare-chunk">
-                                <span className="chunk-score">{c.score.toFixed(2)}</span> {c.file}
-                                <div className="chunk-text">{c.text.slice(0, 130)}…</div>
-                              </div>
-                            ))}
-                          {mode === "agentic" &&
-                            inlineCompare.result.agentic.trace.map((t, i) => (
-                              <div key={i} className="compare-chunk">
-                                <code>{t.tool}</code> {t.summary}
-                              </div>
-                            ))}
-                          <div className="compare-answer">{inlineCompare.result[mode].answer}</div>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="hint">Agentic runs without memory, to isolate the retrieval strategy.</div>
-                  </div>
-                </div>
-              )}
               {loading && (
                 <div className="msg assistant">
                   <div className="role">agent</div>
@@ -1243,14 +1168,6 @@ export default function Home() {
                 onKeyDown={onKeyDown}
                 placeholder="Ask the agent… (Enter to send, Shift+Enter for a new line)"
               />
-              <button
-                className="compare-btn"
-                onClick={runCompare}
-                disabled={comparing || loading || !input.trim()}
-                title="See how three retrieval strategies would answer this — inline, without sending it"
-              >
-                {comparing ? "…" : "⚖ Compare"}
-              </button>
               <button onClick={send} disabled={loading || !input.trim()}>Send</button>
             </div>
           </div>
@@ -1477,8 +1394,9 @@ export default function Home() {
               <>
               <div className="empty">
                 Every memory, grouped by where it lives on the scope lattice — broad (whole firm) at the top,
-                specific (one person) at the bottom. A message&apos;s ▸ x-ray shows the subset injected that turn;
-                this is where you curate the whole library. Editing here changes the file on disk.
+                specific (one person) at the bottom. Levels start collapsed — click one to browse it, or search
+                to jump straight to matches. A message&apos;s ▸ x-ray shows the subset injected that turn; this is
+                where you curate the whole library. Editing here changes the file on disk.
                 <br />
                 <b>Priority</b> sets how strongly the agent leans on a memory when space is tight. <b>Archive</b>{" "}
                 pauses one (reversible); <b>Delete</b> removes it for good.
@@ -1555,16 +1473,32 @@ export default function Home() {
                   .filter((k) => !known.includes(k))
                   .map((k) => ({ key: k, label: k, gloss: "" }));
                 if (filtered.length === 0) return <div className="empty">No memories match.</div>;
+                // Any active search/filter auto-expands every matching level; otherwise
+                // levels start collapsed (just header + count) so the library scans
+                // cleanly with lots of memories. Cap cards per open level, with a
+                // "show more" to reveal the rest — so no level mounts hundreds of editors.
+                const searching =
+                  q !== "" || memLevel !== "all" || memStatusFilter !== "all" || memTypeFilter !== "all";
+                const CAP = 25;
                 return [...LEVELS, ...extras]
                   .filter((lvl) => byLevel[lvl.key]?.length)
-                  .map((lvl) => (
+                  .map((lvl) => {
+                  const items = byLevel[lvl.key];
+                  const open = searching || !!openLevels[lvl.key];
+                  const shown = open ? (showAllInLevel[lvl.key] ? items : items.slice(0, CAP)) : [];
+                  return (
                   <div key={lvl.key} className="mem-level">
-                    <div className="mem-level-head">
-                      <span className="mem-level-name">{lvl.label}</span>
+                    <div
+                      className="mem-level-head"
+                      style={{ cursor: "pointer" }}
+                      onClick={() => setOpenLevels((s) => ({ ...s, [lvl.key]: !open }))}
+                      title={open ? "collapse" : "expand"}
+                    >
+                      <span className="mem-level-name">{open ? "▾" : "▸"} {lvl.label}</span>
                       <span className="mem-level-gloss">{lvl.gloss}</span>
-                      <span className="mem-level-count">{byLevel[lvl.key].length}</span>
+                      <span className="mem-level-count">{items.length}</span>
                     </div>
-                    {byLevel[lvl.key].map((m) => {
+                    {shown.map((m) => {
                       const key = `${m.scope}:${m.id}`;
                       const d = memDraft[key] ?? { body: m.body, importance: m.importance };
                       const retracted = m.status === "retracted";
@@ -1640,8 +1574,17 @@ export default function Home() {
                         </div>
                       );
                     })}
+                    {open && items.length > shown.length && (
+                      <button
+                        className="mini"
+                        onClick={() => setShowAllInLevel((s) => ({ ...s, [lvl.key]: true }))}
+                      >
+                        show {items.length - shown.length} more
+                      </button>
+                    )}
                   </div>
-                ));
+                  );
+                });
               })()}
               </>
               )}
@@ -1676,18 +1619,27 @@ export default function Home() {
                   </div>
                 ))}
 
-                {nominations.length > 0 && <div className="ctx-h">⬆ Promotions ({nominations.length})</div>}
+                {nominations.length > 0 && (
+                  <>
+                    <div className="ctx-h">⬆ Promotions ({nominations.length})</div>
+                    <div className="ctx-cap">
+                      Lessons nominated to move up to a broader scope so future projects inherit them.{" "}
+                      <b>Generalise for the firm</b> rewrites the lesson to remove this client&apos;s specifics so
+                      it&apos;s safe to reuse, and flags anything identifying that remains — review it, then promote.
+                    </div>
+                  </>
+                )}
                 {nominations.map((n) => (
                   <div key={n.id} className="nom">
                     <div className="nom-target">promote to <b>{n.targetScope}</b></div>
                     <div className="nom-fact">“{n.fact}”</div>
                     <div className="nom-meta">nominated by {n.nominatedBy} · from {n.sourceProject} · {n.reason}</div>
-                    <button className="mini" onClick={() => doAbstract(n.id)}>Abstract &amp; leak-check</button>
+                    <button className="mini" onClick={() => doAbstract(n.id)}>Generalise for the firm</button>
                     {abstracts[n.id] && (
                       <>
                         {abstracts[n.id].leak?.flagged && (
                           <div className="leak">
-                            ⚠ possible client detail: {abstracts[n.id].leak!.hits.join(", ")} — edit before promoting
+                            ⚠ possible client detail still present: {abstracts[n.id].leak!.hits.join(", ")} — edit before promoting
                           </div>
                         )}
                         <textarea
