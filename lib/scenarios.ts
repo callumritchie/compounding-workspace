@@ -15,6 +15,7 @@ export type ScenarioStep = {
   goProject?: string; // switch project entering this step
   open?: string; // open a file entering this step
   openPending?: boolean; // open the Memory manager on its Pending tab
+  freshChat?: boolean; // start a clean, empty chat (so the proactive kickoff card can show)
 };
 
 export type Scenario = {
@@ -26,6 +27,33 @@ export type Scenario = {
 };
 
 export const SCENARIOS: Scenario[] = [
+  {
+    id: "warm-start-cold-project",
+    title: "Warm start — a cold project briefs itself",
+    blurb: "Open a brand-new project and it briefs you first — no question typed, no blank page.",
+    setup: { asUser: "callum", goProject: "acme-expansion" },
+    steps: [
+      {
+        say: "You've just been staffed on a brand-new Acme project. Don't type anything — just watch.",
+        watch:
+          "A 👋 kickoff card appears on its own. On a project with no memory of its own, it assembles what the firm already knows — the healthcare playbook, firm policy, and the Acme CFO — into a plain-English brief.",
+        goProject: "acme-expansion", // explicit so freshChat opens the empty chat in the RIGHT project
+        freshChat: true,
+      },
+      {
+        say: "You never face a blank box: click any ▸ starter question in the card to get going.",
+        watch: "Open the answer's ▸ x-ray to see the inherited memories that fired — none of it learned on this project.",
+      },
+      {
+        say: "Make it sharper: in the card, click “＋ Answer 3 quick questions”, answer one or two, and Save.",
+        watch:
+          "The brief refreshes to include what you told it. Open 🧠 Memory manager — the new facts show as PROVISIONAL, and nothing is waiting in the Pending inbox: captured with no approval step.",
+      },
+      {
+        say: "Those provisional facts firm up on their own as the agent uses them (and retract if you 👎 an answer that leaned on one). That's warm start: a cold project briefs itself, says what to ask, and quietly keeps what you teach it — no setup, no approvals.",
+      },
+    ],
+  },
   {
     id: "new-project-strong-start",
     title: "New project — strong start",

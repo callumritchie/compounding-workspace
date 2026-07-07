@@ -163,7 +163,7 @@ const COMP_COLORS = ["#6366f1", "#8b5cf6", "#0ea5e9", "#f59e0b", "#10b981", "#ef
 type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessage?: string; openFile?: string | null; agentId?: string; projectId?: string };
 
 // A project's config (mirrors lib/project ProjectConfig) — a client can have several.
-type ProjectMeta = { id: string; name: string; client: string; sector: string; type: string; status: string };
+type ProjectMeta = { id: string; name: string; client: string; sector: string; type: string; status: string; memoryCount?: number };
 
 // A suggested (not-yet-saved) shared memory awaiting approval.
 type Proposal = { id: string; fact: string; scope: string; proposedBy: string; sourceProject: string; created: string };
@@ -263,6 +263,22 @@ export default function Home() {
   // Ephemeral "compare retrieval" card shown inline in the thread (not persisted).
   const [inlineCompare, setInlineCompare] = useState<{ question: string; result: CompareResult } | null>(null);
   const [uploading, setUploading] = useState(false);
+
+  // ---- Warm start (cold-start activation) ----
+  // On a "cold" project (no memory of its own yet) we proactively show what the
+  // firm already knows + starter questions, offer a 3-question kickoff interview,
+  // and surface questions a freshly-uploaded file unlocks — so the system feels
+  // smart on day one instead of waiting for the user to know what to ask.
+  const [kickoff, setKickoff] = useState<{ brief: string; questions: string[] } | null>(null);
+  const [kickoffBusy, setKickoffBusy] = useState(false);
+  const [kickoffDismissed, setKickoffDismissed] = useState(false);
+  const [intakeQs, setIntakeQs] = useState<string[]>([]);
+  const [showIntake, setShowIntake] = useState(false);
+  const [intakeAnswers, setIntakeAnswers] = useState<Record<number, string>>({});
+  const [intakeBusy, setIntakeBusy] = useState(false);
+  const [intakeDone, setIntakeDone] = useState<string[] | null>(null);
+  const [uploadSuggestions, setUploadSuggestions] = useState<{ questions: string[]; gaps: string[] } | null>(null);
+
   const [showMemory, setShowMemory] = useState(false);
   const [memView, setMemView] = useState<"library" | "pending">("library");
   const [allMemories, setAllMemories] = useState<MemItem[]>([]);
@@ -304,13 +320,54 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project]);
 
-  // Load the list of projects once (for the switcher).
-  useEffect(() => {
+  // Load the list of projects (for the switcher + the cold/warm signal). Called at
+  // mount and again after kickoff seeds memory, so memoryCount stays current.
+  function loadProjects() {
     fetch("/api/projects")
       .then((r) => r.json())
       .then((d) => setProjects(d.projects ?? []))
       .catch(() => setProjects([]));
-  }, []);
+  }
+  useEffect(loadProjects, []);
+
+  // Fetch the day-one kickoff (brief + starter questions) and intake questions for
+  // the current project. `refresh` forces the brief to rebuild (after intake).
+  function loadColdStart(refresh = false) {
+    setKickoffBusy(true);
+    fetch(`/api/kickoff?project=${project}&user=${user}${refresh ? "&refresh=1" : ""}`)
+      .then((r) => r.json())
+      .then((d) => setKickoff({ brief: d.brief ?? "", questions: d.questions ?? [] }))
+      .catch(() => setKickoff(null))
+      .finally(() => setKickoffBusy(false));
+    fetch(`/api/kickoff/intake?project=${project}`)
+      .then((r) => r.json())
+      .then((d) => setIntakeQs(d.questions ?? []))
+      .catch(() => setIntakeQs([]));
+  }
+
+  // Reset the warm-start experience whenever the project (or actor) changes.
+  useEffect(() => {
+    setKickoff(null);
+    setKickoffDismissed(false);
+    setIntakeQs([]);
+    setShowIntake(false);
+    setIntakeAnswers({});
+    setIntakeDone(null);
+    setUploadSuggestions(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, user]);
+
+  // A project is "cold" until it has memory of its own. When we land on a cold one
+  // with an empty chat, proactively load its kickoff — the empty project isn't empty.
+  const currentProject = projects.find((p) => p.id === project);
+  const isColdProject = currentProject ? (currentProject.memoryCount ?? 0) === 0 : false;
+  // Load the kickoff whenever we're on a cold project with an empty chat and haven't
+  // loaded one yet. Watching messages.length + kickoff (not just project) means the
+  // card reliably (re)appears when you open a fresh chat, with no re-render race.
+  useEffect(() => {
+    if (isColdProject && !kickoff && !kickoffBusy && messages.length === 0) loadColdStart();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isColdProject, project, user, messages.length, kickoff, kickoffBusy]);
 
   // Load the promotion review queue (pending nominations).
   function loadPromotions() {
@@ -427,6 +484,10 @@ export default function Home() {
   function applyStepContext(step: ScenarioStep) {
     if (step.asUser && step.asUser !== user) setUser(step.asUser);
     if (step.goProject && step.goProject !== project) setProject(step.goProject);
+    // Open a clean chat AFTER the project switch settles, so the proactive kickoff
+    // card isn't suppressed by a previous chat's messages. Uses the target project
+    // explicitly (the `project` state var is still stale this render).
+    if (step.freshChat) setTimeout(() => newChatIn(step.goProject ?? project), 600);
     if (step.open) setTimeout(() => openFileFn(step.open!), 500); // after the project's files load
     if (step.openPending) {
       loadMemories();
@@ -587,14 +648,25 @@ export default function Home() {
   }
 
   async function newChat() {
+    return newChatIn(project);
+  }
+
+  // Create + open a fresh (empty) chat in a specific project. Taking the project
+  // explicitly matters for the guided scenario, which switches project and opens a
+  // clean chat in the same step — the `project` state var would still be stale then.
+  async function newChatIn(projectId: string) {
     const created = await fetch("/api/chats", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user, project }),
+      body: JSON.stringify({ user, project: projectId }),
     }).then((r) => r.json());
     if (created.chat) {
-      await refreshChats();
-      openChatMeta(created.chat);
+      const list: ChatMeta[] = await fetch(`/api/chats?user=${user}&project=${projectId}`)
+        .then((r) => r.json())
+        .then((d) => d.chats ?? [])
+        .catch(() => []);
+      setChats(list);
+      openChatMeta(created.chat); // empty history → messages=[] → the kickoff card can show
     }
   }
 
@@ -691,10 +763,43 @@ export default function Home() {
         loadFiles();
         openFileFn(d.file);
       }
+      // Turn the upload into momentum: show what this file now lets you ask.
+      const sug = d.suggestions as { questions?: string[]; gaps?: string[] } | undefined;
+      if (sug && ((sug.questions?.length ?? 0) > 0 || (sug.gaps?.length ?? 0) > 0)) {
+        setUploadSuggestions({ questions: sug.questions ?? [], gaps: sug.gaps ?? [] });
+      }
     } finally {
       setUploading(false);
       e.target.value = "";
     }
+  }
+
+  // Submit the guided kickoff interview: the answers are distilled into provisional
+  // project memory (no approval step), then the brief is refreshed so it visibly
+  // reflects what you just told it — the "it got smarter" beat.
+  async function submitIntake() {
+    const answers = intakeQs.map((question, i) => ({ question, answer: intakeAnswers[i] ?? "" }));
+    if (!answers.some((a) => a.answer.trim())) return;
+    setIntakeBusy(true);
+    try {
+      const d = await fetch("/api/kickoff/intake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project, user, answers }),
+      }).then((r) => r.json());
+      setIntakeDone((d.facts as string[]) ?? []);
+      setShowIntake(false);
+      loadProjects(); // memoryCount changes → project is no longer cold
+      loadColdStart(true); // rebuild the brief so it now includes the captured facts
+    } finally {
+      setIntakeBusy(false);
+    }
+  }
+
+  // Click-to-send a suggested/starter question.
+  function askSuggested(q: string) {
+    setUploadSuggestions(null);
+    sendText(q);
   }
 
   async function openFileFn(path: string) {
@@ -931,7 +1036,88 @@ export default function Home() {
           </div>
           <div className="chat">
             <div className="messages">
-              {messages.length === 0 && (
+              {/* Warm start: on a cold project, proactively show what we already know
+                  + starter questions + an optional 3-question kickoff interview. */}
+              {kickoff && !kickoffDismissed && messages.length === 0 && (
+                <div className="kickoff">
+                  <div className="kickoff-head">
+                    <span>👋 Starting on {currentProject?.name || project} — here’s what we already know</span>
+                    <button className="ic-x" title="dismiss" onClick={() => setKickoffDismissed(true)}>×</button>
+                  </div>
+                  {kickoffBusy && !kickoff.brief ? (
+                    <div className="hint">Gathering what the firm already knows…</div>
+                  ) : (
+                    <div className="kickoff-brief markdown">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{kickoff.brief || "_No inherited knowledge yet — the interview below is a great place to start._"}</ReactMarkdown>
+                    </div>
+                  )}
+                  {kickoff.questions.length > 0 && (
+                    <div className="kickoff-qs">
+                      <div className="kickoff-label">Ask to get going:</div>
+                      {kickoff.questions.map((q, i) => (
+                        <button key={i} className="guide-send" disabled={loading || !activeChat} onClick={() => askSuggested(q)}>
+                          ▸ {q}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {intakeDone ? (
+                    <div className="kickoff-done">
+                      ✓ Captured {intakeDone.length} {intakeDone.length === 1 ? "fact" : "facts"} — I’ll remember these (they’ll firm up as we use them).
+                    </div>
+                  ) : intakeQs.length > 0 && (
+                    showIntake ? (
+                      <div className="intake">
+                        <div className="kickoff-label">A few quick questions make every answer sharper:</div>
+                        {intakeQs.map((q, i) => (
+                          <label key={i} className="intake-q">
+                            <span>{q}</span>
+                            <textarea
+                              rows={2}
+                              value={intakeAnswers[i] ?? ""}
+                              onChange={(e) => setIntakeAnswers((a) => ({ ...a, [i]: e.target.value }))}
+                              placeholder="Optional — skip any you’re unsure about"
+                            />
+                          </label>
+                        ))}
+                        <div className="intake-actions">
+                          <button className="guide-send" disabled={intakeBusy} onClick={submitIntake}>
+                            {intakeBusy ? "Saving…" : "Save these"}
+                          </button>
+                          <button className="ghost" disabled={intakeBusy} onClick={() => setShowIntake(false)}>Skip</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button className="intake-open ghost" onClick={() => setShowIntake(true)}>
+                        ＋ Answer 3 quick questions to make this sharper
+                      </button>
+                    )
+                  )}
+                </div>
+              )}
+              {/* A just-uploaded file unlocks new questions. */}
+              {uploadSuggestions && (
+                <div className="kickoff upload-sug">
+                  <div className="kickoff-head">
+                    <span>📎 From the file you just added</span>
+                    <button className="ic-x" title="dismiss" onClick={() => setUploadSuggestions(null)}>×</button>
+                  </div>
+                  {uploadSuggestions.questions.length > 0 && (
+                    <div className="kickoff-qs">
+                      <div className="kickoff-label">You can now ask:</div>
+                      {uploadSuggestions.questions.map((q, i) => (
+                        <button key={i} className="guide-send" disabled={loading || !activeChat} onClick={() => askSuggested(q)}>
+                          ▸ {q}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {uploadSuggestions.gaps.length > 0 && (
+                    <div className="kickoff-gaps hint">Notably not covered: {uploadSuggestions.gaps.join("; ")}.</div>
+                  )}
+                </div>
+              )}
+              {messages.length === 0 && !(kickoff && !kickoffDismissed) && (
                 <div className="empty">
                   Open a file and try “summarise this”, or ask “what are the main themes across the interviews?”.
                   This history is private to {user}.

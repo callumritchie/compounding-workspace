@@ -26,6 +26,7 @@ export type ProjectConfig = {
   type: string; // e.g. strategy, diligence
   status: ProjectStatus; // in-progress | complete — a client can have several
   stakeholders: Stakeholder[]; // people on this project (drive the stakeholder scope)
+  memoryCount?: number; // active memories in this project's OWN scope — 0 ⇒ a "cold" project (set by listProjectConfigs)
 };
 
 export async function getProjectConfig(projectId: string): Promise<ProjectConfig> {
@@ -55,11 +56,21 @@ export async function getProjectConfig(projectId: string): Promise<ProjectConfig
   }
 }
 
-// All projects with their config, for the switcher (grouped by client).
+// All projects with their config, for the switcher (grouped by client). Enriched
+// with memoryCount (active memories in the project's OWN scope) so the UI can tell
+// a "cold" project — one that hasn't accumulated any memory of its own yet — apart
+// from a warm one, and offer the kickoff experience only where it's useful.
 export async function listProjectConfigs(): Promise<ProjectConfig[]> {
   const { listProjects } = await import("./corpus");
+  const { readMemoriesInScope } = await import("./memory");
   const ids = await listProjects();
-  return Promise.all(ids.map(getProjectConfig));
+  return Promise.all(
+    ids.map(async (id) => {
+      const cfg = await getProjectConfig(id);
+      const own = await readMemoriesInScope(`project/${id}`);
+      return { ...cfg, memoryCount: own.length };
+    })
+  );
 }
 
 // The tags that describe "the current situation", used to match a memory's

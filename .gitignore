@@ -13,6 +13,9 @@ workspace/users/
 # Regenerable vector index (rebuild with `npm run index`)
 workspace/index/
 
+# Derived per-project kickoff-brief cache (regenerates on demand from memory)
+workspace/projects/*/kickoff.json
+
 # OS
 .DS_Store
 

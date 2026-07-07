@@ -417,3 +417,24 @@ html, body {
 .guide-nav button { border: 1px solid var(--border); background: var(--bg); border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 13px; }
 .guide-nav button:disabled { opacity: 0.4; cursor: default; }
 .guide-nav button.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+
+/* ---- Warm start: cold-project kickoff card + upload suggestions ---- */
+.kickoff { border: 1px solid var(--accent); background: var(--panel); border-radius: 12px; padding: 14px 16px; margin: 4px 0 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.04); }
+.kickoff.upload-sug { border-color: var(--border); }
+.kickoff-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; font-weight: 600; font-size: 13px; color: var(--accent); }
+.kickoff.upload-sug .kickoff-head { color: var(--ink); }
+.kickoff-head .ic-x { border: none; background: transparent; cursor: pointer; font-size: 18px; line-height: 1; color: var(--muted); }
+.kickoff-brief { font-size: 14px; line-height: 1.55; margin: 8px 0 4px; }
+.kickoff-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 10px 0 2px; }
+.kickoff-qs .guide-send { margin: 6px 0 0; }
+.kickoff-done { margin-top: 10px; font-size: 13px; color: var(--user-b); background: var(--bg); border-radius: 8px; padding: 8px 10px; }
+.kickoff-gaps { margin-top: 8px; }
+.intake-open { margin-top: 12px; border: 1px dashed var(--border); background: transparent; color: var(--muted); border-radius: 8px; padding: 7px 10px; cursor: pointer; font-size: 12px; }
+.intake-open:hover { border-color: var(--accent); color: var(--accent); }
+.intake { margin-top: 10px; }
+.intake-q { display: block; margin-top: 8px; font-size: 13px; }
+.intake-q span { display: block; margin-bottom: 4px; }
+.intake-q textarea { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; font: inherit; font-size: 13px; resize: vertical; }
+.intake-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.intake-actions .guide-send { width: auto; margin: 0; }
+.intake-actions .ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: 12px; }

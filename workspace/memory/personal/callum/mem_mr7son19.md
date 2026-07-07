@@ -6,5 +6,7 @@ provenance:
   origin_user: callum
   origin_project: acme-health
   created: '2026-07-05'
+use_count: 7
+last_used: '2026-07-05'
 ---
 Callum prefers responses formatted as bullet points.
