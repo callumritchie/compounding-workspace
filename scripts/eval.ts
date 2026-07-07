@@ -38,7 +38,13 @@ type Scenario = {
   expect: Expect;
 };
 
-const scenarios: Scenario[] = JSON.parse(readFileSync("workspace/evals/golden.json", "utf8"));
+const allScenarios: Scenario[] = JSON.parse(readFileSync("workspace/evals/golden.json", "utf8"));
+
+// Optional id filter for fast iteration: `eval.ts --only rag` runs only scenarios
+// whose id contains "rag". A bare number still caps how many run (back-compat).
+const onlyIdx = process.argv.indexOf("--only");
+const onlyTerm = onlyIdx !== -1 ? (process.argv[onlyIdx + 1] ?? "").toLowerCase() : "";
+const scenarios = onlyTerm ? allScenarios.filter((s) => s.id.toLowerCase().includes(onlyTerm)) : allScenarios;
 const limit = Number(process.argv[2]) || scenarios.length;
 
 function checkAnswer(text: string, expect: Expect): string[] {
