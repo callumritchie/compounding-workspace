@@ -217,6 +217,7 @@ type MemItem = {
   importance: number;
   status: string;
   confidential?: boolean;
+  pinned?: boolean;
   useCount?: number;
   lastUsed?: string;
   created?: string;
@@ -640,10 +641,32 @@ export default function Home() {
     await fetch("/api/memory/update", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scope: m.scope, id: m.id, status }),
+      body: JSON.stringify({ scope: m.scope, id: m.id, status, user }),
     });
     setMemNote(`${status === "retracted" ? "retracted" : "restored"} ${m.scope}/${m.id}`);
     loadMemories();
+  }
+  // Pin / unpin: a pinned learned memory rides the always-on cached tier (it's
+  // deliberately kept, and — unlike ordinary importance — never decays).
+  async function setMemPinned(m: MemItem, pinned: boolean) {
+    await fetch("/api/memory/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: m.scope, id: m.id, pinned, user }),
+    });
+    setMemNote(`${pinned ? "pinned" : "unpinned"} ${m.scope}/${m.id}`);
+    loadMemories();
+  }
+  // Run memory maintenance (decay untouched learned memory) when the manager opens.
+  function runMaintain() {
+    fetch("/api/memory/maintain", { method: "POST" })
+      .then((r) => r.json())
+      .then((d) => {
+        if ((d?.decayed ?? 0) + (d?.archived ?? 0) > 0) setMemNote(`maintenance: decayed ${d.decayed}, archived ${d.archived}`);
+        loadMemories();
+        loadLifecycle();
+      })
+      .catch(() => {});
   }
   async function deleteMem(m: MemItem) {
     await fetch("/api/memory/delete", {
@@ -1027,7 +1050,7 @@ export default function Home() {
           </button>
           <button
             className="queue-btn"
-            onClick={() => { loadMemories(); loadProposals(); loadPromotions(); loadSignals(); loadLifecycle(); setShowMemory(true); }}
+            onClick={() => { loadMemories(); loadProposals(); loadPromotions(); loadSignals(); loadLifecycle(); runMaintain(); setShowMemory(true); }}
           >
             🧠 Memory manager{proposals.length + nominations.length ? ` (${proposals.length + nominations.length})` : ""}
           </button>
@@ -1708,6 +1731,7 @@ export default function Home() {
                           <div className="mem-meta">
                             <span className="mem-scope">{m.scope}</span>
                             <span className={`pill ${isConstitution ? "stable" : "ranked"}`}>{m.type}</span>
+                            {m.pinned && <span className="pill stable" title="pinned into the always-on cached tier; never decays">📌 pinned</span>}
                             {m.confidential && <span className="pill conf">confidential</span>}
                             {retracted && <span className="pill ret">archived</span>}
                             {m.useCount ? <span className="mem-uses" title="turns it's been injected into">used {m.useCount}×</span> : null}
@@ -1747,6 +1771,15 @@ export default function Home() {
                             )}
                             <div className="mem-actions">
                               <button className="mini" onClick={() => saveMem(m)}>Save</button>
+                              {!isConstitution && !retracted && (
+                                <button
+                                  className="mini"
+                                  title={m.pinned ? "unpin — let it rank and decay normally" : "pin into the always-on cached tier; it won't decay"}
+                                  onClick={() => setMemPinned(m, !m.pinned)}
+                                >
+                                  {m.pinned ? "📌 Unpin" : "📌 Pin"}
+                                </button>
+                              )}
                               {retracted ? (
                                 <button className="mini" title="use this memory again" onClick={() => setMemStatus(m, "active")}>
                                   Restore
