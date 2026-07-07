@@ -22,6 +22,7 @@ import { TOOLS, executeTool, type TraceEntry } from "./tools";
 import { getMemoriesForContext } from "./memory";
 import { readFile, listFiles } from "./corpus";
 import { getProjectConfig } from "./project";
+import { getEngagement, engagementDigest } from "./engagement";
 
 // The reasoning engine. `claude-opus-4-8` is Anthropic's most capable Opus model,
 // used for the main agent loop. FAST_MODEL (Haiku) handles the cheap auxiliary
@@ -53,7 +54,15 @@ something.
 You also have long-term MEMORY. Facts you already know appear in the MEMORY section
 of this prompt — respect them and weigh each by its trust label. When the user tells
 you a durable preference, client fact, or lesson worth keeping, use save_memory so
-you remember it next time. Be concise, direct, and practical.`;
+you remember it next time.
+
+When an ENGAGEMENT CONSTRAINTS block is present, treat it as the real-world frame:
+weigh every recommendation against the budget, timeline, scope, and team capacity.
+If a suggestion (yours or the user's) would strain one — e.g. it can't land before an
+at-risk milestone, it pushes budget, or it falls under scope OUT with no change
+request — say so in one short line that cites the specific constraint, then still give
+your best substantive answer. Don't let constraints stop you from thinking; use them
+to make the advice land in reality. Be concise, direct, and practical.`;
 
 // The SDK reads ANTHROPIC_API_KEY from the environment (including .env.local).
 const client = new Anthropic();
@@ -465,8 +474,12 @@ export async function inferNextActions(projectId: string, user: string, recent: 
   const memory = await inheritedMemoryLines(projectId, user);
   const files = await listFiles(projectId).catch(() => [] as string[]);
   const fileList = files.length ? files.join(", ") : "(no files yet)";
+  // Constraints make the suggestions realistic — a next step that can't land before
+  // an at-risk milestone, or that pushes budget/scope, is worth surfacing.
+  const engagement = await getEngagement(projectId);
+  const constraints = engagement ? engagementDigest(engagement) : "";
 
-  const sig = createHash("sha1").update(`${user}\n${memory}\n${fileList}\n${recent}`).digest("hex");
+  const sig = createHash("sha1").update(`${user}\n${memory}\n${fileList}\n${constraints}\n${recent}`).digest("hex");
   const cacheFile = compassCacheFile(projectId);
   try {
     const cached = JSON.parse(await fs.readFile(cacheFile, "utf8")) as NextActions & { sig?: string };
@@ -489,12 +502,14 @@ export async function inferNextActions(projectId: string, user: string, recent: 
       "prompt (the exact message to send the agent), why (one short clause grounded in the state, e.g. 'the COO " +
       "interview isn't synthesised yet'). offer = the SINGLE most useful thing the agent could just do now on the " +
       "user's behalf (same shape), or null if nothing clearly warrants it. Be concrete and grounded in the inputs; " +
-      "never invent files or facts. JSON only, no preamble.",
+      "never invent files or facts. If the engagement constraints show something under pressure (an at-risk milestone, " +
+      "budget strain, an out-of-scope ask), let that shape the stage and at least one action. JSON only, no preamble.",
     messages: [
       {
         role: "user",
         content:
           `Project: ${cfg.name} — client "${cfg.client}", sector ${cfg.sector}, type ${cfg.type}, status ${cfg.status}.\n\n` +
+          (constraints ? `${constraints}\n\n` : "") +
           `Files in the corpus: ${fileList}\n\n` +
           `What the team already knows (inherited memory):\n${memory || "(none yet)"}\n\n` +
           `Recent activity in this chat:\n${recent || "(nothing yet)"}\n\nJSON:`,

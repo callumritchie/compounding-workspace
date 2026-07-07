@@ -22,6 +22,7 @@ import {
 } from "@/lib/workspace";
 import { runAgent, type AgentEvent } from "@/lib/agent";
 import { buildWorkingContext } from "@/lib/context";
+import { getEngagement, engagementDigest } from "@/lib/engagement";
 import { assembleContext, estimateTokens } from "@/lib/assemble";
 import { getRelevantMemories, recordMemoryUse, graduateOnUse } from "@/lib/memory";
 import { getProjectConfig } from "@/lib/project";
@@ -74,12 +75,21 @@ export async function POST(req: Request) {
   const memories = await getRelevantMemories(user, project, message);
   const assembled = assembleContext(memories, workingContext);
 
+  // Engagement constraints (SOW / budget / timeline / scope / team / risks) are
+  // STANDING context — they bear on every recommendation, so they ride the volatile
+  // tier every turn (present whether or not the question mentions them). Absent for
+  // projects with no engagement.md.
+  const engagement = await getEngagement(project);
+  const engagementBlock = engagement ? engagementDigest(engagement) : "";
+  const volatileBlock = [engagementBlock, assembled.volatileBlock].filter(Boolean).join("\n\n");
+
   // Break the input prompt into parts for the composition bar.
   const priorHistory = history.slice(0, -1).map((m) => m.content).join("\n");
   const composition = [
     { label: "Persona", tokens: estimateTokens(agent.systemPrompt), tier: "cached" },
     { label: "Tool schemas", tokens: estimateTokens(JSON.stringify(agentTools)), tier: "cached" },
     { label: "Stable memory", tokens: estimateTokens(assembled.stableBlock), tier: "cached" },
+    { label: "Engagement constraints", tokens: estimateTokens(engagementBlock), tier: "volatile" },
     { label: "Ranked memory", tokens: estimateTokens(assembled.rankedBlock), tier: "volatile" },
     { label: "Working context", tokens: estimateTokens(workingContext), tier: "volatile" },
     { label: "History", tokens: estimateTokens(priorHistory), tier: "volatile" },
@@ -113,7 +123,7 @@ export async function POST(req: Request) {
             projectId: project,
             user,
             stableBlock: assembled.stableBlock,
-            volatileBlock: assembled.volatileBlock,
+            volatileBlock,
             agent: { systemPrompt: agent.systemPrompt, model: agent.model, toolNames: agent.tools },
           },
           (ev: AgentEvent) => send(ev)

@@ -108,5 +108,23 @@
     "expect": {
       "answerIncludesAny": ["reimbursement", "cost-to-serve", "cost to serve", "staffing", "downside", "stress"]
     }
+  },
+  {
+    "id": "engagement-constraint-flag",
+    "description": "Engagement constraints: a next-step recommendation weighs the at-risk timeline / budget from the engagement brief",
+    "user": "callum",
+    "message": "What should we do as the next step on this engagement?",
+    "expect": {
+      "answerIncludesAny": ["at-risk", "at risk", "budget", "milestone", "timeline", "downside", "July 25", "Jul 25", "2026-07-25"]
+    }
+  },
+  {
+    "id": "engagement-out-of-scope",
+    "description": "Engagement constraints: flags an out-of-scope request against the SOW rather than just complying",
+    "user": "callum",
+    "message": "Let's also run a full vendor selection for the client as part of this work. Kick it off.",
+    "expect": {
+      "answerIncludesAny": ["out of scope", "out-of-scope", "scope", "change request", "SOW"]
+    }
   }
 ]

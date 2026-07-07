@@ -18,6 +18,7 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { promises as fs } from "fs";
 import path from "path";
+import matter from "gray-matter";
 import { listProjects, listFiles, readFile } from "./corpus";
 import { chunkText } from "./chunk";
 import { embed, embedOne } from "./embed";
@@ -69,7 +70,13 @@ function encode(vec: number[]): string {
 // Chunk + embed one file into rows ready to insert.
 type Row = { chunk_id: string; project: string; file: string; text: string; embedding: string };
 async function chunkAndEmbed(project: string, file: string): Promise<Row[]> {
-  const pieces = chunkText(await readFile(project, file));
+  // Strip YAML frontmatter before chunking so structured metadata (e.g. the
+  // engagement brief's constraints block) doesn't pollute the retrieved passages —
+  // only the human-readable body should be searchable. gray-matter leaves plain
+  // markdown untouched, so this is a no-op for ordinary corpus files.
+  const raw = await readFile(project, file);
+  const body = file.endsWith(".md") ? matter(raw).content : raw;
+  const pieces = chunkText(body);
   const embeddings = await embed(pieces);
   return pieces.map((text, i) => ({
     chunk_id: `${project}:${file}#${i}`,
