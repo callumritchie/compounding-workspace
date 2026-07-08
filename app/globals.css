@@ -272,6 +272,14 @@ html, body {
 .briefing-note { color: #2e7d32; }
 .theme-card.mine { border-left: 3px solid var(--accent, #6b7cff); }
 .for-you { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; color: var(--accent, #6b7cff); border: 1px solid currentColor; border-radius: 4px; padding: 1px 5px; }
+.theme-actions { display: flex; gap: 6px; }
+.mini.primary { background: var(--accent, #6b7cff); color: #fff; border-color: transparent; }
+.signal-draft { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 10px; }
+.signal-draft-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.signal-draft-kind { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; }
+.signal-draft-title { font-weight: 600; font-size: 13px; }
+.signal-draft-btns { margin-left: auto; display: flex; gap: 6px; }
+.signal-draft-body { font-size: 13px; background: var(--panel, rgba(0,0,0,0.02)); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; max-height: 340px; overflow-y: auto; }
 
 /* Space (cross-project lens) view */
 .lens-select { font-weight: 600; }

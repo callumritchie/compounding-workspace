@@ -374,6 +374,8 @@ export default function Home() {
   const [homeThemesLoading, setHomeThemesLoading] = useState(false);
   const [readySectors, setReadySectors] = useState<SectorDensity[] | null>(null);
   const briefingUserRef = useRef<string | null>(null);
+  // Drafted artifacts, keyed by the signal's insight text (stable across re-sorts).
+  const [signalDrafts, setSignalDrafts] = useState<Record<string, { loading?: boolean; error?: string; title?: string; kind?: string; body?: string; saved?: string }>>({});
   // Bottom-right proactive popup: which items the user has dismissed this session
   // (keyed by a stable id), and whether the whole popup is collapsed.
   const [popupDismissed, setPopupDismissed] = useState<Record<string, boolean>>({});
@@ -625,6 +627,41 @@ export default function Home() {
       body: JSON.stringify({ insight: t.insight, sectors: t.support.sectors, user }),
     }).then((r) => r.json());
     setMemNote(d?.ok ? `nominated to ${d.targetScope} — review in the Memory manager` : d?.error ?? "nomination failed");
+  }
+
+  // Turn a signal into its artifact in place (POV / pitch / brief / practice note).
+  function draftLabel(route: string): string {
+    if (route === "marketing") return "✍️ Draft POV";
+    if (route === "sales") return "✍️ Draft pitch outline";
+    if (route === "leadership") return "✍️ Draft brief";
+    return "✍️ Draft practice note";
+  }
+  async function draftSignal(t: EmergentTheme) {
+    const key = t.insight;
+    if (signalDrafts[key]?.loading) return;
+    setSignalDrafts((d) => ({ ...d, [key]: { loading: true } }));
+    try {
+      const r = await fetch("/api/signals/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ insight: t.insight, route: t.route, action: t.action, sectors: t.support.sectors, count: t.support.count, evidence: t.evidence, user }),
+      }).then((r) => r.json());
+      if (r?.error) setSignalDrafts((d) => ({ ...d, [key]: { error: r.error } }));
+      else setSignalDrafts((d) => ({ ...d, [key]: { ...r.draft } }));
+    } catch {
+      setSignalDrafts((d) => ({ ...d, [key]: { error: "draft failed" } }));
+    }
+  }
+  async function saveAsset(t: EmergentTheme) {
+    const key = t.insight;
+    const draft = signalDrafts[key];
+    if (!draft?.body) return;
+    const r = await fetch("/api/signals/save-asset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: draft.title, kind: draft.kind, body: draft.body, user }),
+    }).then((r) => r.json());
+    if (r?.ok) setSignalDrafts((d) => ({ ...d, [key]: { ...d[key], saved: r.path } }));
   }
 
   // If a user without firm access ends up on the firm-wide lens (e.g. after
@@ -1525,10 +1562,39 @@ export default function Home() {
                       <div className="opp-action">→ {t.action}</div>
                       <div className="theme-foot">
                         <span className="theme-sectors">{t.support.sectors.join(" · ")}</span>
-                        <button className="mini" onClick={() => nominateTheme(t)} title="propose as firm knowledge (enters the review pipeline)">
-                          Nominate to firm memory
-                        </button>
+                        <div className="theme-actions">
+                          <button className="mini primary" onClick={() => draftSignal(t)} disabled={signalDrafts[t.insight]?.loading} title="draft the artifact from this signal, in place">
+                            {signalDrafts[t.insight]?.loading ? "Drafting…" : draftLabel(t.route)}
+                          </button>
+                          <button className="mini" onClick={() => nominateTheme(t)} title="propose as firm knowledge (enters the review pipeline)">
+                            Nominate
+                          </button>
+                        </div>
                       </div>
+                      {signalDrafts[t.insight] && !signalDrafts[t.insight].loading && (
+                        <div className="signal-draft">
+                          {signalDrafts[t.insight].error ? (
+                            <div className="hint">⚠️ {signalDrafts[t.insight].error}</div>
+                          ) : (
+                            <>
+                              <div className="signal-draft-head">
+                                <span className="signal-draft-kind">{signalDrafts[t.insight].kind}</span>
+                                <span className="signal-draft-title">{signalDrafts[t.insight].title}</span>
+                                <div className="signal-draft-btns">
+                                  <button className="mini" onClick={() => navigator.clipboard?.writeText(signalDrafts[t.insight].body ?? "")}>Copy</button>
+                                  <button className="mini" onClick={() => saveAsset(t)} disabled={!!signalDrafts[t.insight].saved}>
+                                    {signalDrafts[t.insight].saved ? "Saved ✓" : "Save to library"}
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="markdown signal-draft-body">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{signalDrafts[t.insight].body ?? ""}</ReactMarkdown>
+                              </div>
+                              {signalDrafts[t.insight].saved && <div className="hint">saved to workspace/{signalDrafts[t.insight].saved}</div>}
+                            </>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))}
               </div>
