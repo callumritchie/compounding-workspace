@@ -273,6 +273,13 @@ type SpaceAnswer = {
   spanned?: number;
 };
 type Opportunity = { title: string; kind: string; rationale: string; suggestedAction: string; projects: string[] };
+type ImpactStats = {
+  totalReuses: number;
+  distinctInsights: number;
+  targetProjects: number;
+  topInsights: { memoryId: string; scope: string; reuses: number; targets: number; body: string }[];
+  byMonth: { month: string; reuses: number }[];
+};
 
 // Mirror of lib/engagement.ts EngagementSummary (kept local so the client bundle
 // doesn't pull server-only deps). Fed by GET /api/engagement.
@@ -378,6 +385,11 @@ export default function Home() {
   const [lifecycle, setLifecycle] = useState<{ stale: StaleItem[]; duplicates: DupPair[] }>({ stale: [], duplicates: [] });
   // Guided scenario demo mode.
   const [showScenarios, setShowScenarios] = useState(false);
+  const [showImpact, setShowImpact] = useState(false);
+  const [impact, setImpact] = useState<ImpactStats | null>(null);
+  function loadImpact() {
+    fetch("/api/impact").then((r) => r.json()).then(setImpact).catch(() => setImpact(null));
+  }
   const [activeScenario, setActiveScenario] = useState<Scenario | null>(null);
   const [scenarioStep, setScenarioStep] = useState(0);
 
@@ -760,6 +772,17 @@ export default function Home() {
         .catch(() => ({ history: [] }));
       setMemHistory((h) => ({ ...h, [key]: d.history ?? [] }));
     }
+  }
+  // Outcome loop (C3): mark whether a memory's guidance actually worked. Importance
+  // moves on correctness, not usage.
+  async function setMemOutcome(m: MemItem, worked: boolean) {
+    await fetch("/api/memory/outcome", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: m.scope, id: m.id, worked, user }),
+    });
+    setMemNote(`${worked ? "reinforced (worked)" : "downweighted (didn't work)"} ${m.scope}/${m.id}`);
+    loadMemories();
   }
   // Run memory maintenance (decay untouched learned memory) when the manager opens.
   function runMaintain() {
@@ -1185,6 +1208,9 @@ export default function Home() {
             onClick={() => { loadMemories(); loadProposals(); loadPromotions(); loadSignals(); loadLifecycle(); runMaintain(); setShowMemory(true); }}
           >
             🧠 Memory manager{proposals.length + nominations.length ? ` (${proposals.length + nominations.length})` : ""}
+          </button>
+          <button className="queue-btn" onClick={() => { loadImpact(); setShowImpact(true); }} title="how much firm knowledge is being reused across engagements">
+            📈 Impact
           </button>
           <div className="user-switch">
             <span className="subtitle">You are:</span>
@@ -1838,6 +1864,48 @@ export default function Home() {
         </div>
       )}
 
+      {showImpact && (
+        <div className="modal-overlay" onClick={() => setShowImpact(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h2>📈 Impact — the compounding</h2>
+              <button onClick={() => setShowImpact(false)}>×</button>
+            </div>
+            <p className="modal-intro">
+              The reuse the old way of working can&apos;t measure: firm knowledge learned on one engagement, applied on another.
+            </p>
+            {!impact ? (
+              <div className="hint">loading…</div>
+            ) : (
+              <div className="impact">
+                <div className="impact-stats">
+                  <div className="impact-stat"><b>{impact.totalReuses}</b><span>insight reuses</span></div>
+                  <div className="impact-stat"><b>{impact.distinctInsights}</b><span>distinct insights reused</span></div>
+                  <div className="impact-stat"><b>{impact.targetProjects}</b><span>engagements benefited</span></div>
+                </div>
+                <div className="impact-headline">
+                  {impact.totalReuses === 0
+                    ? "No cross-engagement reuse recorded yet — it accrues as shared knowledge is applied on new projects."
+                    : `${impact.distinctInsights} insight${impact.distinctInsights === 1 ? "" : "s"} reused across ${impact.targetProjects} engagement${impact.targetProjects === 1 ? "" : "s"}.`}
+                </div>
+                {impact.topInsights.length > 0 && (
+                  <div className="impact-top">
+                    <div className="impact-top-head">Most-reused insights</div>
+                    {impact.topInsights.map((t) => (
+                      <div key={`${t.scope}/${t.memoryId}`} className="impact-row">
+                        <span className="pill ranked">{t.scope}</span>
+                        <span className="impact-body">{t.body ? (t.body.length > 90 ? t.body.slice(0, 90) + "…" : t.body) : t.memoryId}</span>
+                        <span className="impact-count" title="reuses · engagements">{t.reuses}× · {t.targets} proj</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {showMemory && (
         <div className="modal-overlay" onClick={() => setShowMemory(false)}>
           <div className="modal wide" onClick={(e) => e.stopPropagation()}>
@@ -2031,6 +2099,16 @@ export default function Home() {
                                 >
                                   Archive
                                 </button>
+                              )}
+                              {!isConstitution && !retracted && (
+                                <>
+                                  <button className="mini" title="this memory's guidance worked → reinforce it (importance up)" onClick={() => setMemOutcome(m, true)}>
+                                    👍 Worked
+                                  </button>
+                                  <button className="mini" title="its guidance didn't hold → downweight it (importance down)" onClick={() => setMemOutcome(m, false)}>
+                                    👎 Didn&apos;t
+                                  </button>
+                                </>
                               )}
                               <button className="mini" title="who changed this memory, and when" onClick={() => toggleHistory(m)}>
                                 History

@@ -314,6 +314,28 @@ export async function listAllMemories(): Promise<Memory[]> {
   return rows.map(rowToMemory);
 }
 
+// Outcome-based reinforcement (ticket C3). Importance should move on CORRECTNESS,
+// not usage — so when a recommendation that leaned on a memory is marked as having
+// worked (or not), we adjust the memory here. Worked → importance up (and stamp
+// reinforced); didn't → importance down. This is the trustworthy signal leadership
+// can bet on, decoupled from raw injection counts. Audited as an "outcome" event.
+export async function reinforceOutcome(scope: string, id: string, worked: boolean, actor?: string): Promise<boolean> {
+  await ensureSeeded();
+  const db = getDb();
+  const before = db.prepare("SELECT importance FROM memories WHERE scope = ? AND id = ?").get(scope, id) as
+    | { importance: number }
+    | undefined;
+  if (!before) return false;
+  const delta = worked ? 0.1 : -0.15;
+  const next = Math.max(0.05, Math.min(1, Number((before.importance + delta).toFixed(3))));
+  const today = new Date().toISOString().slice(0, 10);
+  db.transaction(() => {
+    db.prepare("UPDATE memories SET importance = ?, last_reinforced = ? WHERE scope = ? AND id = ?").run(next, today, scope, id);
+    audit(db, { actor: actor ?? "outcome", action: "outcome", scope, memoryId: id, detail: { worked, from: before.importance, to: next } });
+  })();
+  return true;
+}
+
 // The audit trail for one memory: every create/update/retract/delete/graduate/
 // decay logged against it, newest first. This is what makes a shared memory
 // accountable — you can see who changed what, and when.

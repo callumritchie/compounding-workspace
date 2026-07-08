@@ -163,6 +163,22 @@ CREATE VIRTUAL TABLE IF NOT EXISTS cards_vec USING vec0(
   sector    TEXT,
   embedding float[${MEM_DIM}] distance_metric=cosine
 );
+
+-- Knowledge-reuse events (ticket C1): every time a piece of firm knowledge learned
+-- ELSEWHERE (a shared-scope learned memory) is applied on a DIFFERENT project, we
+-- log it. This is the compounding the old way-of-working could never measure — the
+-- leadership impact metric ("N insights reused across M engagements").
+CREATE TABLE IF NOT EXISTS reuse_events (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts             TEXT NOT NULL,
+  memory_id      TEXT,
+  scope          TEXT,
+  source_project TEXT,                             -- where the insight was learned
+  target_project TEXT,                             -- where it was reused
+  actor          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reuse_memory ON reuse_events(memory_id);
+CREATE INDEX IF NOT EXISTS idx_reuse_target ON reuse_events(target_project);
 `;
 
 // sqlite-vec takes an embedding as a JSON array string.

@@ -23,6 +23,7 @@ import {
 import { runAgent, type AgentEvent } from "@/lib/agent";
 import { buildWorkingContext } from "@/lib/context";
 import { getEngagement, engagementDigest } from "@/lib/engagement";
+import { recordReuse } from "@/lib/reuse";
 import { assembleContext, estimateTokens } from "@/lib/assemble";
 import { getRelevantMemories, recordMemoryUse, graduateOnUse } from "@/lib/memory";
 import { getProjectConfig } from "@/lib/project";
@@ -108,6 +109,14 @@ export async function POST(req: Request) {
   // (fire-and-forget; powers "most-used" sorting + staleness). Not on the hot path.
   const injectedRefs = injected.map((m) => ({ scope: m.scope, id: m.id }));
   void recordMemoryUse(injectedRefs);
+
+  // Reuse signal (C1): a LEARNED memory whose scope sits ABOVE this project on the
+  // lattice (company / sector / client / stakeholder) is firm knowledge learned
+  // ELSEWHERE, now applied here — the compounding. Log it for the impact metric.
+  const reuses = injected
+    .filter((m) => m.type === "learned" && !m.scope.startsWith("project/") && !m.scope.startsWith("personal/"))
+    .map((m) => ({ memoryId: m.id, scope: m.scope, sourceProject: null, targetProject: project, actor: user }));
+  void recordReuse(reuses);
   // Graduation signal: any provisional memory leaned on here moves one step closer
   // to becoming trusted — earning its place through use, not an approval click.
   void graduateOnUse(injectedRefs);
