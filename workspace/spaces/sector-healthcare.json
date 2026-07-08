@@ -1,0 +1,6 @@
+{
+  "id": "sector-healthcare",
+  "name": "Healthcare (sector)",
+  "type": "sector",
+  "scope": { "sectors": ["healthcare"] }
+}

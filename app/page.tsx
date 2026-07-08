@@ -266,6 +266,13 @@ function canApproveScope(u: string, scope: string): boolean {
 }
 type Leak = { flagged: boolean; hits: string[]; reasons?: string[] };
 
+type SpaceAnswer = {
+  answer: string;
+  projectsUsed: { project: string; title: string; client: string; sector: string }[];
+  abstracted?: boolean;
+  spanned?: number;
+};
+
 // Mirror of lib/engagement.ts EngagementSummary (kept local so the client bundle
 // doesn't pull server-only deps). Fed by GET /api/engagement.
 type EngSummary = {
@@ -320,6 +327,14 @@ export default function Home() {
   // Engagement strip: the standing constraints (phase · budget · next milestone ·
   // top risk) shown at the top of the chat column. Loaded from /api/engagement.
   const [engagement, setEngagement] = useState<EngSummary | null>(null);
+  // Lens: null = Delivery (a project chat); otherwise a Space id (account/sector/
+  // firm) — a cross-project lens. The centre panel swaps to the space view.
+  const [spaces, setSpaces] = useState<{ id: string; name: string; type: string; projects: number }[]>([]);
+  const [spaceId, setSpaceId] = useState<string | null>(null);
+  const [spaceQuery, setSpaceQuery] = useState("");
+  const [spaceAudience, setSpaceAudience] = useState("consultant");
+  const [spaceLoading, setSpaceLoading] = useState(false);
+  const [spaceAnswer, setSpaceAnswer] = useState<SpaceAnswer | null>(null);
   // Bottom-right proactive popup: which items the user has dismissed this session
   // (keyed by a stable id), and whether the whole popup is collapsed.
   const [popupDismissed, setPopupDismissed] = useState<Record<string, boolean>>({});
@@ -484,6 +499,31 @@ export default function Home() {
       .catch(() => setEngagement(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, openFile]);
+
+  // Load the available lenses (spaces) once.
+  useEffect(() => {
+    fetch("/api/spaces").then((r) => r.json()).then((d) => setSpaces(d.spaces ?? [])).catch(() => {});
+  }, []);
+
+  // Ask a cross-project question of the active space (coarse→fine→map→reduce on the
+  // server). Non-streaming: it's a synthesis over many engagements, not a chat turn.
+  async function runSpaceQuery() {
+    if (!spaceId || !spaceQuery.trim() || spaceLoading) return;
+    setSpaceLoading(true);
+    setSpaceAnswer(null);
+    try {
+      const d = await fetch("/api/space/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spaceId, query: spaceQuery, audience: spaceAudience }),
+      }).then((r) => r.json());
+      setSpaceAnswer(d?.error ? { answer: `Error: ${d.error}`, projectsUsed: [] } : d);
+    } catch {
+      setSpaceAnswer({ answer: "Something went wrong.", projectsUsed: [] });
+    } finally {
+      setSpaceLoading(false);
+    }
+  }
 
   // Reset the guidance surfaces when switching chat or project so stale
   // suggestions never linger and a re-dismissed strip can reappear.
@@ -1074,7 +1114,25 @@ export default function Home() {
           <span className="subtitle">context engineering, made visible</span>
         </h1>
         <div className="topbar-right">
-          <select className="project-select" value={project} onChange={(e) => setProject(e.target.value)} title="project (grouped by client · ✓ complete, ● in-progress)">
+          {/* Lens switcher: Delivery (a project) vs a cross-project Space. */}
+          <select
+            className="project-select lens-select"
+            value={spaceId ?? "__delivery__"}
+            onChange={(e) => setSpaceId(e.target.value === "__delivery__" ? null : e.target.value)}
+            title="lens — Delivery works inside one project; a Space queries across many"
+          >
+            <option value="__delivery__">🗂 Delivery (project)</option>
+            {spaces.length > 0 && (
+              <optgroup label="Spaces — query across projects">
+                {spaces.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.type === "account" ? "🏢" : s.type === "sector" ? "🌐" : "🏛"} {s.name} ({s.projects})
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+          <select className="project-select" value={project} onChange={(e) => setProject(e.target.value)} disabled={!!spaceId} title="project (grouped by client · ✓ complete, ● in-progress)">
             {Object.entries(
               projects.reduce<Record<string, ProjectMeta[]>>((acc, p) => {
                 (acc[p.client] ||= []).push(p);
@@ -1162,6 +1220,59 @@ export default function Home() {
               </span>
             )}
           </div>
+          {spaceId ? (
+            <div className="space-view">
+              <div className="space-head">
+                <span className="space-title">🔭 {spaces.find((s) => s.id === spaceId)?.name}</span>
+                <span className="space-sub">
+                  querying across {spaces.find((s) => s.id === spaceId)?.projects ?? 0} engagements
+                  {(spaceAnswer?.abstracted ?? spaces.find((s) => s.id === spaceId)?.type !== "account") && (
+                    <span className="space-abstract" title="spans multiple clients — answers are de-identified">🛡 de-identified</span>
+                  )}
+                </span>
+              </div>
+              <div className="space-ask">
+                <textarea
+                  value={spaceQuery}
+                  onChange={(e) => setSpaceQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runSpaceQuery(); } }}
+                  placeholder="Ask across these engagements… e.g. 'Where does convenience-driven pricing let us down, and what should we pitch instead?'"
+                />
+                <div className="space-ask-row">
+                  <label className="space-audience">
+                    for
+                    <select value={spaceAudience} onChange={(e) => setSpaceAudience(e.target.value)}>
+                      <option value="consultant">delivery</option>
+                      <option value="sales">sales / BD</option>
+                      <option value="marketing">marketing</option>
+                      <option value="leadership">leadership</option>
+                    </select>
+                  </label>
+                  <button onClick={runSpaceQuery} disabled={spaceLoading || !spaceQuery.trim()}>
+                    {spaceLoading ? "Synthesising…" : "Ask across projects"}
+                  </button>
+                </div>
+              </div>
+              {spaceLoading && <div className="hint">coarse → fine → extract per engagement → synthesise…</div>}
+              {spaceAnswer && (
+                <div className="space-answer">
+                  <div className="markdown">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{spaceAnswer.answer}</ReactMarkdown>
+                  </div>
+                  {spaceAnswer.projectsUsed.length > 0 && (
+                    <div className="space-provenance">
+                      <span className="space-prov-label">Drawn from {spaceAnswer.projectsUsed.length} engagements:</span>
+                      {spaceAnswer.projectsUsed.map((p) => (
+                        <span key={p.project} className="space-prov-chip" title={`${p.client} · ${p.sector}`}>
+                          {p.title}{p.client !== "(withheld)" ? ` · ${p.client}` : ""}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
           <div className="chat">
             {/* Engagement strip: the standing constraints frame, always visible.
                 Click to open engagement.md and edit the underlying constraints. */}
@@ -1397,6 +1508,7 @@ export default function Home() {
               <button onClick={send} disabled={loading || !input.trim()}>Send</button>
             </div>
           </div>
+          )}
         </div>
 
         {/* Right: Chats — the user's conversation history (click an answer's ▸ x-ray for what informed it) */}
