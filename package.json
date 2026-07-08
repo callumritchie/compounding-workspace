@@ -12,7 +12,9 @@
     "db:reseed": "sh scripts/with-env.sh tsx scripts/db-reseed.ts",
     "db:maintain": "sh scripts/with-env.sh tsx scripts/db-maintain.ts",
     "seed:history": "sh scripts/with-env.sh tsx scripts/seed-history.ts",
+    "seed:interactions": "sh scripts/with-env.sh tsx scripts/seed-interactions.ts",
     "cards:build": "sh scripts/with-env.sh tsx scripts/cards-build.ts",
+    "signals:build": "sh scripts/with-env.sh tsx scripts/signals-build.ts",
     "check:invariants": "sh scripts/with-env.sh tsx scripts/check-invariants.ts",
     "verify": "npm run check:invariants && npm run eval",
     "check:corpus": "sh scripts/with-env.sh tsx scripts/check-corpus.ts"

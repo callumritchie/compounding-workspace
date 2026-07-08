@@ -1,0 +1,184 @@
+/* ---------------------------------------------------------------------------
+   signals/inbox.ts — the prioritized signal inbox (the surface).
+
+   Assembles every signal family into ONE feed for a user, then:
+     • GATES by role — delivery-health/early-warning/risk-playbook need the delivery
+       lead; the aggregate families need firm authorisation; nothing leaks to a role
+       that shouldn't see it.
+     • DE-IDENTIFIES the aggregate families (new-service-line, emergent, risk-playbook
+       show sectors + counts, never client names); single-account signals keep the
+       client for the authorised viewer and are audit-logged.
+     • SCORES by urgency × freshness(age-decay) × confidence × role-match, so
+       perishable signals surface and age out — this is what makes it PUSH not pull.
+     • FLAGS soft signals (low-confidence transcript intel) so they route through the
+       existing nomination → review gate before driving an external action.
+--------------------------------------------------------------------------- */
+
+import { getDb, audit } from "../db";
+import { roleOf, canAccessSpace, canSeeDeliveryHealth } from "../team";
+import { queryAtoms } from "./atoms";
+import { accountHealth, riskEarlyWarnings, deliveryHealth, mitigationPlaybook } from "./temporal";
+import { detectWhitespace } from "./whitespace";
+
+export type SignalFamily =
+  | "buying" | "competitive" | "objection" | "churn"
+  | "early-warning" | "delivery-health" | "risk-playbook" | "new-service-line";
+
+export type SignalRoute = "sales" | "marketing" | "leadership" | "practice";
+
+export type InboxSignal = {
+  id: string;
+  family: SignalFamily;
+  route: SignalRoute;
+  title: string;
+  detail: string;
+  evidence: string[];
+  support?: { clients?: string[]; sectors: string[]; projects?: string[]; count: number };
+  project?: string;
+  client?: string; // omitted on de-identified (aggregate) families
+  sector?: string;
+  confidence: number;
+  urgency: number;
+  ts?: string; // freshness anchor
+  ageDays?: number;
+  score: number;
+  soft: boolean; // below confidence threshold → needs review before acting
+  deIdentified: boolean;
+  actions: { draft: boolean; nominate: boolean }; // which in-place actions apply
+};
+
+const CONF_THRESHOLD = 0.6; // below this, a transcript-derived signal is "soft"
+
+// Who may see each family (within the firm-authorised audience that loads the inbox).
+const VISIBILITY: Record<SignalFamily, (user: string) => boolean> = {
+  buying: (u) => ["lead", "sales"].includes(roleOf(u)),
+  competitive: (u) => ["lead", "sales"].includes(roleOf(u)),
+  objection: (u) => ["lead", "sales", "marketing"].includes(roleOf(u)),
+  churn: (u) => ["lead", "sales"].includes(roleOf(u)),
+  "new-service-line": (u) => canAccessSpace(u, "firm"),
+  "early-warning": (u) => canSeeDeliveryHealth(u),
+  "risk-playbook": (u) => canSeeDeliveryHealth(u),
+  "delivery-health": (u) => canSeeDeliveryHealth(u),
+};
+
+const userRoute = (user: string): SignalRoute =>
+  roleOf(user) === "sales" ? "sales" : roleOf(user) === "marketing" ? "marketing" : "leadership";
+
+function freshness(ts?: string): { f: number; ageDays?: number } {
+  if (!ts) return { f: 0.55 }; // timeless signals get a neutral weight
+  const age = (Date.now() - new Date(ts).getTime()) / 86_400_000;
+  if (!Number.isFinite(age)) return { f: 0.55 };
+  return { f: 1 / (1 + Math.max(0, age) / 14), ageDays: Math.round(age) }; // ~2-week half-context
+}
+
+export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]; deIdentified: boolean }> {
+  const raw: InboxSignal[] = [];
+  const mk = (s: Omit<InboxSignal, "score" | "ageDays">): void => {
+    const { f, ageDays } = freshness(s.ts);
+    const roleMatch = s.route === userRoute(user) ? 1.25 : 1;
+    const score = Number((s.confidence * s.urgency * f * roleMatch).toFixed(4));
+    raw.push({ ...s, ageDays, score });
+  };
+
+  // ---- Sales atoms: buying / competitive / objection (single-account, client kept) ----
+  for (const a of queryAtoms({ types: ["buying", "competitive", "objection"], sourceKinds: ["client-transcript"] })) {
+    const family = a.type as SignalFamily;
+    const route: SignalRoute = family === "objection" ? "marketing" : "sales";
+    mk({
+      id: a.id, family, route,
+      title: a.text,
+      detail: `${a.client} · ${a.sector}`,
+      evidence: [a.evidence].filter(Boolean),
+      project: a.project, client: a.client, sector: a.sector,
+      confidence: a.confidence, urgency: a.urgency, ts: a.ts,
+      soft: a.confidence < CONF_THRESHOLD,
+      deIdentified: false,
+      actions: { draft: family !== "objection", nominate: true },
+    });
+  }
+
+  // ---- Account churn early-warning (single-account) ----
+  for (const h of await accountHealth()) {
+    if (h.trend !== "declining") continue;
+    mk({
+      id: `churn:${h.project}`, family: "churn", route: "sales",
+      title: `${h.client} sentiment is sliding (${h.slope > 0 ? "+" : ""}${h.slope} over ${h.meetings} meetings)`,
+      detail: `${h.client} · ${h.sector} — churn risk on a live engagement`,
+      evidence: [h.evidence].filter(Boolean),
+      project: h.project, client: h.client, sector: h.sector,
+      confidence: Math.min(1, 0.5 + Math.abs(h.slope) / 3), urgency: 0.9, ts: h.ts,
+      soft: false, deIdentified: false,
+      actions: { draft: false, nominate: false },
+    });
+  }
+
+  // ---- Delivery-health (GATED — from internal candour) ----
+  for (const d of await deliveryHealth()) {
+    if (d.band === "healthy") continue;
+    mk({
+      id: `dh:${d.project}`, family: "delivery-health", route: "practice",
+      title: `${d.project} delivery health: ${d.band} (${d.score})`,
+      detail: d.drivers.join("; "),
+      evidence: [d.evidence].filter(Boolean),
+      project: d.project, client: d.client, sector: d.sector,
+      confidence: 0.8, urgency: d.band === "at-risk" ? 0.9 : 0.6,
+      soft: false, deIdentified: false,
+      actions: { draft: false, nominate: false },
+    });
+  }
+
+  // ---- Early warning (live risk escalating, unmitigated) ----
+  for (const r of await riskEarlyWarnings()) {
+    mk({
+      id: `ew:${r.project}`, family: "early-warning", route: "leadership",
+      title: `${r.risk} — escalating & unmitigated (${r.from}→${r.to})`,
+      detail: `${r.client} · ${r.sector} — ${r.weeks} weeks tracked`,
+      evidence: [r.evidence],
+      project: r.project, client: r.client, sector: r.sector,
+      confidence: 0.85, urgency: 0.85,
+      soft: false, deIdentified: false,
+      actions: { draft: false, nominate: false },
+    });
+  }
+
+  // ---- Risk & mitigation playbook (aggregate, de-identified: sectors only) ----
+  for (const e of await mitigationPlaybook()) {
+    if (!e.recommended) continue;
+    const worked = e.mitigations.find((m) => m.mitigation === e.recommended);
+    mk({
+      id: `pb:${e.riskTheme}`, family: "risk-playbook", route: "practice",
+      title: `Playbook: "${e.riskTheme}" — use "${e.recommended}"`,
+      detail: `${worked?.worked ?? 0} resolved with this mitigation; other approaches stalled`,
+      evidence: e.mitigations.map((m) => `"${m.mitigation}" → worked ${m.worked}, failed ${m.failed}`),
+      support: { sectors: e.sectors, count: e.mitigations.reduce((n, m) => n + m.projects.length, 0) },
+      confidence: 0.85, urgency: 0.4,
+      soft: false, deIdentified: true,
+      actions: { draft: false, nominate: true },
+    });
+  }
+
+  // ---- New service lines / whitespace (aggregate, de-identified: sectors + count) ----
+  for (const w of await detectWhitespace()) {
+    mk({
+      id: `ws:${w.need.slice(0, 40)}`, family: "new-service-line", route: "leadership",
+      title: `Whitespace: ${w.need}`,
+      detail: `${w.count} clients across ${w.sectors.join(" · ")} asking — not in our catalogue`,
+      evidence: w.evidence,
+      support: { sectors: w.sectors, count: w.count },
+      confidence: Math.min(0.9, 0.5 + w.count * 0.1), urgency: 0.4,
+      soft: false, deIdentified: true,
+      actions: { draft: true, nominate: true },
+    });
+  }
+
+  // Gate by role, then rank by score.
+  const signals = raw.filter((s) => VISIBILITY[s.family](user)).sort((a, b) => b.score - a.score);
+
+  // Audit any cross-client, client-identifying read by a firm-authorised user.
+  const identifying = signals.filter((s) => !s.deIdentified && s.client);
+  if (identifying.length && canAccessSpace(user, "firm")) {
+    audit(getDb(), { actor: user, action: "signal_inbox_read", scope: "firm", detail: `${identifying.length} client-identifying signals` });
+  }
+
+  return { signals, deIdentified: signals.some((s) => s.deIdentified) };
+}
