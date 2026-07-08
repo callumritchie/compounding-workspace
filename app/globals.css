@@ -239,6 +239,23 @@ html, body {
 .space-provenance { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .space-prov-label { font-size: 12px; color: var(--muted); }
 .space-prov-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(120,120,120,0.14); }
+.space-ask-btns { display: flex; gap: 8px; align-items: center; }
+.space-opps { display: flex; flex-direction: column; gap: 10px; }
+.opp-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--panel, rgba(0,0,0,0.02)); }
+.opp-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.opp-title { font-weight: 600; font-size: 13px; }
+.opp-kind { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; background: rgba(120,120,120,0.16); }
+.opp-kind.opp-follow-on, .opp-kind.opp-expansion { background: rgba(80,160,90,0.18); color: #2e7d32; }
+.opp-kind.opp-risk { background: rgba(220,70,70,0.16); color: #c0392b; }
+.opp-kind.opp-offering, .opp-kind.opp-pov, .opp-kind.opp-bd-play { background: rgba(80,120,220,0.16); color: #3a63c0; }
+.opp-why { font-size: 12px; color: var(--fg); margin-bottom: 4px; }
+.opp-action { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.opp-prov { display: flex; flex-wrap: wrap; gap: 5px; }
+@media (prefers-color-scheme: dark) {
+  .opp-kind.opp-follow-on, .opp-kind.opp-expansion { color: #81c784; }
+  .opp-kind.opp-risk { color: #ff8a80; }
+  .opp-kind.opp-offering, .opp-kind.opp-pov, .opp-kind.opp-bd-play { color: #9db8ff; }
+}
 
 /* Engagement constraints strip — standing frame at the top of the chat column */
 .engagement-strip {

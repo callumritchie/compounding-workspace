@@ -272,6 +272,7 @@ type SpaceAnswer = {
   abstracted?: boolean;
   spanned?: number;
 };
+type Opportunity = { title: string; kind: string; rationale: string; suggestedAction: string; projects: string[] };
 
 // Mirror of lib/engagement.ts EngagementSummary (kept local so the client bundle
 // doesn't pull server-only deps). Fed by GET /api/engagement.
@@ -335,6 +336,8 @@ export default function Home() {
   const [spaceAudience, setSpaceAudience] = useState("consultant");
   const [spaceLoading, setSpaceLoading] = useState(false);
   const [spaceAnswer, setSpaceAnswer] = useState<SpaceAnswer | null>(null);
+  const [opps, setOpps] = useState<Opportunity[] | null>(null);
+  const [oppLoading, setOppLoading] = useState(false);
   // Bottom-right proactive popup: which items the user has dismissed this session
   // (keyed by a stable id), and whether the whole popup is collapsed.
   const [popupDismissed, setPopupDismissed] = useState<Record<string, boolean>>({});
@@ -504,6 +507,29 @@ export default function Home() {
   useEffect(() => {
     fetch("/api/spaces").then((r) => r.json()).then((d) => setSpaces(d.spaces ?? [])).catch(() => {});
   }, []);
+
+  // Clear the space results when switching lens.
+  useEffect(() => { setSpaceAnswer(null); setOpps(null); }, [spaceId]);
+
+  // Proactively spot opportunities across the space's engagements (follow-on for
+  // accounts; offerings / POVs / BD plays for sector & firm). Structured, not prose.
+  async function spotSpaceOpportunities() {
+    if (!spaceId || oppLoading) return;
+    setOppLoading(true);
+    setOpps(null);
+    try {
+      const d = await fetch("/api/space/opportunities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spaceId }),
+      }).then((r) => r.json());
+      setOpps(d.opportunities ?? []);
+    } catch {
+      setOpps([]);
+    } finally {
+      setOppLoading(false);
+    }
+  }
 
   // Ask a cross-project question of the active space (coarse→fine→map→reduce on the
   // server). Non-streaming: it's a synthesis over many engagements, not a chat turn.
@@ -1248,11 +1274,37 @@ export default function Home() {
                       <option value="leadership">leadership</option>
                     </select>
                   </label>
-                  <button onClick={runSpaceQuery} disabled={spaceLoading || !spaceQuery.trim()}>
-                    {spaceLoading ? "Synthesising…" : "Ask across projects"}
-                  </button>
+                  <div className="space-ask-btns">
+                    <button className="mini" onClick={spotSpaceOpportunities} disabled={oppLoading} title="proactively surface follow-on / offering / BD opportunities">
+                      {oppLoading ? "Spotting…" : "✨ Spot opportunities"}
+                    </button>
+                    <button onClick={runSpaceQuery} disabled={spaceLoading || !spaceQuery.trim()}>
+                      {spaceLoading ? "Synthesising…" : "Ask across projects"}
+                    </button>
+                  </div>
                 </div>
               </div>
+              {opps && (
+                <div className="space-opps">
+                  {opps.length === 0 ? (
+                    <div className="hint">No clear opportunities surfaced.</div>
+                  ) : (
+                    opps.map((o, i) => (
+                      <div key={i} className="opp-card">
+                        <div className="opp-head">
+                          <span className={`opp-kind opp-${o.kind}`}>{o.kind}</span>
+                          <span className="opp-title">{o.title}</span>
+                        </div>
+                        <div className="opp-why">{o.rationale}</div>
+                        <div className="opp-action">→ {o.suggestedAction}</div>
+                        {o.projects.length > 0 && (
+                          <div className="opp-prov">{o.projects.map((p, j) => <span key={j} className="space-prov-chip">{p}</span>)}</div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
               {spaceLoading && <div className="hint">coarse → fine → extract per engagement → synthesise…</div>}
               {spaceAnswer && (
                 <div className="space-answer">
