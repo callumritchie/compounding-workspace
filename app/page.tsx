@@ -523,6 +523,12 @@ export default function Home() {
   // Clear the space results when switching lens.
   useEffect(() => { setSpaceAnswer(null); setOpps(null); }, [spaceId]);
 
+  // If an analyst ends up on the firm-wide lens (e.g. after switching user), drop
+  // back to Delivery — the firm lens is Lead-only.
+  useEffect(() => {
+    if (spaceId && user !== "callum" && spaces.find((s) => s.id === spaceId)?.type === "firm") setSpaceId(null);
+  }, [user, spaceId, spaces]);
+
   // Proactively spot opportunities across the space's engagements (follow-on for
   // accounts; offerings / POVs / BD plays for sector & firm). Structured, not prose.
   async function spotSpaceOpportunities() {
@@ -533,9 +539,10 @@ export default function Home() {
       const d = await fetch("/api/space/opportunities", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spaceId }),
+        body: JSON.stringify({ spaceId, user }),
       }).then((r) => r.json());
-      setOpps(d.opportunities ?? []);
+      if (d?.error) { setSpaceAnswer({ answer: `🔒 ${d.error}`, projectsUsed: [] }); setOpps([]); }
+      else setOpps(d.opportunities ?? []);
     } catch {
       setOpps([]);
     } finally {
@@ -553,9 +560,9 @@ export default function Home() {
       const d = await fetch("/api/space/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spaceId, query: spaceQuery, audience: spaceAudience }),
+        body: JSON.stringify({ spaceId, query: spaceQuery, audience: spaceAudience, user }),
       }).then((r) => r.json());
-      setSpaceAnswer(d?.error ? { answer: `Error: ${d.error}`, projectsUsed: [] } : d);
+      setSpaceAnswer(d?.error ? { answer: `🔒 ${d.error}`, projectsUsed: [] } : d);
     } catch {
       setSpaceAnswer({ answer: "Something went wrong.", projectsUsed: [] });
     } finally {
@@ -1173,7 +1180,8 @@ export default function Home() {
             <option value="__delivery__">🗂 Delivery (project)</option>
             {spaces.length > 0 && (
               <optgroup label="Spaces — query across projects">
-                {spaces.map((s) => (
+                {/* Firm-wide combines every client → Lead-only (mirrors canAccessSpace). */}
+                {spaces.filter((s) => s.type !== "firm" || user === "callum").map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.type === "account" ? "🏢" : s.type === "sector" ? "🌐" : "🏛"} {s.name} ({s.projects})
                   </option>

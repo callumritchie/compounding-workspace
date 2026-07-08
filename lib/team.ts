@@ -46,3 +46,17 @@ export function approvalBlockReason(user: string, scope: string): string | null 
   if (canApprove(user, scope)) return null;
   return `Only a Lead can approve ${levelOf(scope)}-level memory.`;
 }
+
+// Cross-project SPACE access (ticket H1 / F2). Querying across many clients is a
+// governance decision, not just a retrieval one. Account + sector lenses are open
+// to the team; the firm-wide lens (which combines every client) is leadership-only.
+// This is the query-time access boundary that complements de-identification.
+export function canAccessSpace(user: string, spaceType: "account" | "sector" | "firm"): boolean {
+  if (spaceType === "firm") return roleOf(user) === "lead";
+  return true;
+}
+
+export function spaceAccessBlockReason(user: string, spaceType: "account" | "sector" | "firm"): string | null {
+  if (canAccessSpace(user, spaceType)) return null;
+  return "The firm-wide lens combines every client's data — only a Lead can query it.";
+}
