@@ -5,5 +5,10 @@
   "sector": "healthcare",
   "type": "strategy",
   "status": "in-progress",
-  "stakeholders": ["acme-cfo"]
+  "stakeholders": [
+    "acme-cfo"
+  ],
+  "team": [
+    "callum"
+  ]
 }

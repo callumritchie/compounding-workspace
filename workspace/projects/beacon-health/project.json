@@ -4,5 +4,8 @@
   "client": "beacon",
   "sector": "healthcare",
   "type": "strategy",
-  "status": "complete"
+  "status": "complete",
+  "team": [
+    "callum"
+  ]
 }

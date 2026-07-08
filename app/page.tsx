@@ -204,7 +204,7 @@ const CONTEXT_WINDOW = 200_000;
 type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessage?: string; openFile?: string | null; agentId?: string; projectId?: string };
 
 // A project's config (mirrors lib/project ProjectConfig) — a client can have several.
-type ProjectMeta = { id: string; name: string; client: string; sector: string; type: string; status: string; memoryCount?: number };
+type ProjectMeta = { id: string; name: string; client: string; sector: string; type: string; status: string; team?: string[]; memoryCount?: number };
 
 // A suggested (not-yet-saved) shared memory awaiting approval.
 type Proposal = { id: string; fact: string; scope: string; proposedBy: string; sourceProject: string; created: string };
@@ -253,10 +253,20 @@ type DupRef = { scope: string; id: string; body: string };
 type DupPair = { a: DupRef; b: DupRef; score: number };
 
 // Client mirror of lib/team.ts — used only to gate the UI (the API is the real
-// gate). Project memory: any team member. Broader scopes: a Lead only.
-const CLIENT_ROLES: Record<string, "lead" | "analyst"> = { callum: "lead", bob: "analyst" };
+// gate). Delivery roles (lead/analyst) work inside projects; intelligence roles
+// (sales/marketing) work across projects and land on the lenses.
+type ClientRole = "lead" | "analyst" | "sales" | "marketing";
+const CLIENT_ROLES: Record<string, ClientRole> = { callum: "lead", bob: "analyst", dana: "sales", mo: "marketing" };
+const ROLE_LABELS: Record<ClientRole, string> = { lead: "Lead", analyst: "Analyst", sales: "Sales / BD", marketing: "Marketing" };
+const USER_NAMES: Record<string, string> = { callum: "Callum", bob: "Bob", dana: "Dana", mo: "Mo" };
 function roleLabelOf(u: string): string {
-  return CLIENT_ROLES[u] === "lead" ? "Lead" : "Analyst";
+  return ROLE_LABELS[CLIENT_ROLES[u] ?? "analyst"];
+}
+function isDeliveryRoleClient(u: string): boolean {
+  return CLIENT_ROLES[u] === "lead" || CLIENT_ROLES[u] === "analyst";
+}
+function canAccessFirmClient(u: string): boolean {
+  return ["lead", "sales", "marketing"].includes(CLIENT_ROLES[u] ?? "analyst");
 }
 function canApproveScope(u: string, scope: string): boolean {
   const level = scope.split("/")[0];
@@ -342,8 +352,11 @@ export default function Home() {
   // Engagement strip: the standing constraints (phase · budget · next milestone ·
   // top risk) shown at the top of the chat column. Loaded from /api/engagement.
   const [engagement, setEngagement] = useState<EngSummary | null>(null);
-  // Lens: null = Delivery (a project chat); otherwise a Space id (account/sector/
-  // firm) — a cross-project lens. The centre panel swaps to the space view.
+  // Navigation altitude: "home" is the hub (your engagements + the cross-project
+  // lenses); "project" is inside one engagement (files · chat · history).
+  const [view, setView] = useState<"home" | "project" | "space">("home");
+  const [showAllProjects, setShowAllProjects] = useState(false); // leads: mine vs all
+  // Lens: the active cross-project Space id (account/sector/firm), used on Home.
   const [spaces, setSpaces] = useState<{ id: string; name: string; type: string; projects: number }[]>([]);
   const [spaceId, setSpaceId] = useState<string | null>(null);
   const [spaceQuery, setSpaceQuery] = useState("");
@@ -528,6 +541,28 @@ export default function Home() {
   useEffect(() => {
     fetch("/api/spaces").then((r) => r.json()).then((d) => setSpaces(d.spaces ?? [])).catch(() => {});
   }, []);
+
+  // Navigation: open a project (delivery) / open a lens (intelligence) / go home.
+  function openProject(id: string) {
+    setProject(id);
+    setSpaceId(null);
+    setOpenFile(null);
+    setView("project");
+  }
+  function openSpace(id: string) {
+    setSpaceId(id);
+    setSpaceAnswer(null);
+    setOpps(null);
+    setThemes(null);
+    setView("space");
+  }
+  function goHome() {
+    setView("home");
+  }
+  // Intelligence roles (sales/marketing) don't own delivery — keep them on the hub.
+  useEffect(() => {
+    if (!isDeliveryRoleClient(user)) setView("home");
+  }, [user]);
 
   // Clear the space results when switching lens.
   useEffect(() => { setSpaceAnswer(null); setOpps(null); setThemes(null); }, [spaceId]);
@@ -1195,78 +1230,252 @@ export default function Home() {
     }
   }
 
+  // The cross-project lens screen (an "intelligence" altitude, not inside a project).
+  const activeSpace = spaces.find((s) => s.id === spaceId);
+  function renderSpaceView() {
+    return (
+      <div className="space-screen">
+        <div className="space-view">
+          <div className="space-head">
+            <span className="space-title">🔭 {activeSpace?.name}</span>
+            <span className="space-sub">
+              querying across {activeSpace?.projects ?? 0} engagements
+              {(spaceAnswer?.abstracted ?? activeSpace?.type !== "account") && (
+                <span className="space-abstract" title="spans multiple clients — answers are de-identified">🛡 de-identified</span>
+              )}
+            </span>
+          </div>
+          <div className="space-ask">
+            <textarea
+              value={spaceQuery}
+              onChange={(e) => setSpaceQuery(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runSpaceQuery(); } }}
+              placeholder="Ask across these engagements… e.g. 'Where does convenience-driven pricing let us down, and what should we pitch instead?'"
+            />
+            <div className="space-ask-row">
+              <label className="space-audience">
+                for
+                <select value={spaceAudience} onChange={(e) => setSpaceAudience(e.target.value)}>
+                  <option value="consultant">delivery</option>
+                  <option value="sales">sales / BD</option>
+                  <option value="marketing">marketing</option>
+                  <option value="leadership">leadership</option>
+                </select>
+              </label>
+              <div className="space-ask-btns">
+                {activeSpace?.type === "firm" && (
+                  <button className="mini" onClick={runTriangulate} disabled={themesLoading} title="find emergent themes — weak in one engagement, strong across many">
+                    {themesLoading ? "Triangulating…" : "🔺 Triangulate"}
+                  </button>
+                )}
+                <button className="mini" onClick={spotSpaceOpportunities} disabled={oppLoading} title="proactively surface follow-on / offering / BD opportunities">
+                  {oppLoading ? "Spotting…" : "✨ Spot opportunities"}
+                </button>
+                <button onClick={runSpaceQuery} disabled={spaceLoading || !spaceQuery.trim()}>
+                  {spaceLoading ? "Synthesising…" : "Ask across projects"}
+                </button>
+              </div>
+            </div>
+          </div>
+          {opps && (
+            <div className="space-opps">
+              {opps.length === 0 ? (
+                <div className="hint">No clear opportunities surfaced.</div>
+              ) : (
+                opps.map((o, i) => (
+                  <div key={i} className="opp-card">
+                    <div className="opp-head">
+                      <span className={`opp-kind opp-${o.kind}`}>{o.kind}</span>
+                      <span className="opp-title">{o.title}</span>
+                    </div>
+                    <div className="opp-why">{o.rationale}</div>
+                    <div className="opp-action">→ {o.suggestedAction}</div>
+                    {o.projects.length > 0 && (
+                      <div className="opp-prov">{o.projects.map((p, j) => <span key={j} className="space-prov-chip">{p}</span>)}</div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+          {themes && (
+            <div className="space-themes">
+              <div className="themes-head">🔺 Emergent signals — patterns weak in one engagement, strong across many</div>
+              {themes.length === 0 ? (
+                <div className="hint">No theme yet spans enough engagements to be emergent.</div>
+              ) : (
+                themes.map((t, i) => (
+                  <div key={i} className="theme-card">
+                    <div className="theme-top">
+                      <span className={`opp-kind route-${t.route}`}>{t.route}</span>
+                      <span className="theme-count">{t.support.count} engagements · {t.support.sectors.length} sector{t.support.sectors.length === 1 ? "" : "s"}</span>
+                    </div>
+                    <div className="theme-insight">{t.insight}</div>
+                    <div className="opp-action">→ {t.action}</div>
+                    <div className="theme-foot">
+                      <span className="theme-sectors">{t.support.sectors.join(" · ")}</span>
+                      <button className="mini" onClick={() => nominateTheme(t)} title="propose as firm knowledge (enters the review pipeline)">
+                        Nominate to firm memory
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+          {spaceLoading && <div className="hint">coarse → fine → extract per engagement → synthesise…</div>}
+          {spaceAnswer && (
+            <div className="space-answer">
+              <div className="markdown">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{spaceAnswer.answer}</ReactMarkdown>
+              </div>
+              {spaceAnswer.projectsUsed.length > 0 && (
+                <div className="space-provenance">
+                  <span className="space-prov-label">Drawn from {spaceAnswer.projectsUsed.length} engagements:</span>
+                  {spaceAnswer.projectsUsed.map((p) => (
+                    <span key={p.project} className="space-prov-chip" title={`${p.client} · ${p.sector}`}>
+                      {p.title}{p.client !== "(withheld)" ? ` · ${p.client}` : ""}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Home: which engagements are "yours" (team membership), split by status.
+  const myProjects = projects.filter((p) => showAllProjects || (p.team ?? []).includes(user));
+  const activeProjects = myProjects.filter((p) => p.status !== "complete");
+  const completedProjects = myProjects.filter((p) => p.status === "complete");
+  const visibleLenses = spaces.filter((s) => s.type !== "firm" || canAccessFirmClient(user));
+
   return (
     <div className="app">
       {/* ---- Top bar ---- */}
       <div className="topbar">
-        <h1>
+        <h1 className="home-link" onClick={goHome} title="back to Home">
           Compounding Workspace
           <span className="subtitle">context engineering, made visible</span>
         </h1>
+        {view !== "home" && (
+          <span className="crumb">
+            <button className="crumb-home" onClick={goHome}>‹ Home</button>
+            <span className="crumb-sep">/</span>
+            <span className="crumb-proj">
+              {view === "project"
+                ? projects.find((p) => p.id === project)?.name ?? project
+                : `🔭 ${activeSpace?.name ?? "Lens"}`}
+            </span>
+          </span>
+        )}
         <div className="topbar-right">
-          {/* Lens switcher: Delivery (a project) vs a cross-project Space. */}
-          <select
-            className="project-select lens-select"
-            value={spaceId ?? "__delivery__"}
-            onChange={(e) => setSpaceId(e.target.value === "__delivery__" ? null : e.target.value)}
-            title="lens — Delivery works inside one project; a Space queries across many"
-          >
-            <option value="__delivery__">🗂 Delivery (project)</option>
-            {spaces.length > 0 && (
-              <optgroup label="Spaces — query across projects">
-                {/* Firm-wide combines every client → Lead-only (mirrors canAccessSpace). */}
-                {spaces.filter((s) => s.type !== "firm" || user === "callum").map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.type === "account" ? "🏢" : s.type === "sector" ? "🌐" : "🏛"} {s.name} ({s.projects})
-                  </option>
-                ))}
-              </optgroup>
-            )}
-          </select>
-          <select className="project-select" value={project} onChange={(e) => setProject(e.target.value)} disabled={!!spaceId} title="project (grouped by client · ✓ complete, ● in-progress)">
-            {Object.entries(
-              projects.reduce<Record<string, ProjectMeta[]>>((acc, p) => {
-                (acc[p.client] ||= []).push(p);
-                return acc;
-              }, {})
-            ).map(([client, ps]) => (
-              <optgroup key={client} label={client}>
-                {ps.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.status === "complete" ? "✓" : "●"} {p.name} · {p.type}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-          <button className="queue-btn scenarios-btn" onClick={() => setShowScenarios(true)}>
-            ✨ Scenarios
-          </button>
-          <button className="queue-btn" onClick={() => { loadAgents(); setShowAgents(true); }}>
-            🤖 Agents
-          </button>
+          {view === "project" && (
+            <>
+              <button className="queue-btn scenarios-btn" onClick={() => setShowScenarios(true)}>✨ Scenarios</button>
+              <button className="queue-btn" onClick={() => { loadAgents(); setShowAgents(true); }}>🤖 Agents</button>
+            </>
+          )}
           <button
             className="queue-btn"
             onClick={() => { loadMemories(); loadProposals(); loadPromotions(); loadSignals(); loadLifecycle(); runMaintain(); setShowMemory(true); }}
           >
-            🧠 Memory manager{proposals.length + nominations.length ? ` (${proposals.length + nominations.length})` : ""}
+            🧠 Memory{proposals.length + nominations.length ? ` (${proposals.length + nominations.length})` : ""}
           </button>
           <button className="queue-btn" onClick={() => { loadImpact(); setShowImpact(true); }} title="how much firm knowledge is being reused across engagements">
             📈 Impact
           </button>
           <div className="user-switch">
             <span className="subtitle">You are:</span>
-            <button className={`callum ${user === "callum" ? "active" : ""}`} onClick={() => setUser("callum")}>
-              Callum <span className="role-badge">Lead</span>
-            </button>
-            <button className={`bob ${user === "bob" ? "active" : ""}`} onClick={() => setUser("bob")}>
-              Bob <span className="role-badge">Analyst</span>
-            </button>
+            <select className="user-select" value={user} onChange={(e) => setUser(e.target.value as User)} title="switch persona">
+              {(["callum", "bob", "dana", "mo"] as const).map((u) => (
+                <option key={u} value={u}>{USER_NAMES[u]} · {roleLabelOf(u)}</option>
+              ))}
+            </select>
           </div>
         </div>
       </div>
 
-      {/* ---- Three panels ---- */}
+      {/* ---- Home hub: your engagements + the cross-project lenses ---- */}
+      {view === "home" && (
+        <div className="home">
+          <div className="home-hero">
+            <div>
+              <h2>Home</h2>
+              <span className="home-role">{USER_NAMES[user]} · {roleLabelOf(user)}</span>
+            </div>
+          </div>
+
+          {isDeliveryRoleClient(user) && (
+            <section className="home-section">
+              <div className="home-section-head">
+                <h3>Your engagements</h3>
+                {CLIENT_ROLES[user] === "lead" && (
+                  <label className="home-toggle">
+                    <input type="checkbox" checked={showAllProjects} onChange={(e) => setShowAllProjects(e.target.checked)} /> show all firm engagements
+                  </label>
+                )}
+              </div>
+              {myProjects.length === 0 ? (
+                <div className="empty">No engagements assigned to you yet.</div>
+              ) : (
+                <>
+                  {activeProjects.length > 0 && <div className="home-group-label">Active</div>}
+                  <div className="proj-grid">
+                    {activeProjects.map((p) => (
+                      <button key={p.id} className="proj-card" onClick={() => openProject(p.id)}>
+                        <div className="proj-card-top">
+                          <span className="proj-card-name">{p.name}</span>
+                          <span className="proj-card-status active">● active</span>
+                        </div>
+                        <div className="proj-card-meta">{p.client} · {p.sector} · {p.type}</div>
+                      </button>
+                    ))}
+                  </div>
+                  {completedProjects.length > 0 && <div className="home-group-label">Completed</div>}
+                  <div className="proj-grid">
+                    {completedProjects.map((p) => (
+                      <button key={p.id} className="proj-card done" onClick={() => openProject(p.id)}>
+                        <div className="proj-card-top">
+                          <span className="proj-card-name">{p.name}</span>
+                          <span className="proj-card-status done">✓ complete</span>
+                        </div>
+                        <div className="proj-card-meta">{p.client} · {p.sector} · {p.type}</div>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </section>
+          )}
+
+          <section className="home-section">
+            <div className="home-section-head">
+              <h3>{isDeliveryRoleClient(user) ? "Across your work" : "Your workspace — across engagements"}</h3>
+            </div>
+            <p className="home-hint">
+              Query, spot opportunities, and triangulate signals across many engagements. Answers are de-identified where client data is combined.
+            </p>
+            <div className="lens-grid">
+              {visibleLenses.map((s) => (
+                <button key={s.id} className={`lens-card lens-${s.type}`} onClick={() => openSpace(s.id)}>
+                  <span className="lens-icon">{s.type === "account" ? "🏢" : s.type === "sector" ? "🌐" : "🏛"}</span>
+                  <span className="lens-name">{s.name}</span>
+                  <span className="lens-meta">{s.type} · {s.projects} engagements</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* ---- Cross-project lens screen (intelligence altitude) ---- */}
+      {view === "space" && renderSpaceView()}
+
+      {/* ---- Project workspace: three panels ---- */}
+      {view === "project" && (
       <div className="panels">
         {/* Left: Files (shared) */}
         <div className="panel">
@@ -1314,115 +1523,6 @@ export default function Home() {
               </span>
             )}
           </div>
-          {spaceId ? (
-            <div className="space-view">
-              <div className="space-head">
-                <span className="space-title">🔭 {spaces.find((s) => s.id === spaceId)?.name}</span>
-                <span className="space-sub">
-                  querying across {spaces.find((s) => s.id === spaceId)?.projects ?? 0} engagements
-                  {(spaceAnswer?.abstracted ?? spaces.find((s) => s.id === spaceId)?.type !== "account") && (
-                    <span className="space-abstract" title="spans multiple clients — answers are de-identified">🛡 de-identified</span>
-                  )}
-                </span>
-              </div>
-              <div className="space-ask">
-                <textarea
-                  value={spaceQuery}
-                  onChange={(e) => setSpaceQuery(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runSpaceQuery(); } }}
-                  placeholder="Ask across these engagements… e.g. 'Where does convenience-driven pricing let us down, and what should we pitch instead?'"
-                />
-                <div className="space-ask-row">
-                  <label className="space-audience">
-                    for
-                    <select value={spaceAudience} onChange={(e) => setSpaceAudience(e.target.value)}>
-                      <option value="consultant">delivery</option>
-                      <option value="sales">sales / BD</option>
-                      <option value="marketing">marketing</option>
-                      <option value="leadership">leadership</option>
-                    </select>
-                  </label>
-                  <div className="space-ask-btns">
-                    {spaces.find((s) => s.id === spaceId)?.type === "firm" && (
-                      <button className="mini" onClick={runTriangulate} disabled={themesLoading} title="find emergent themes — weak in one engagement, strong across many">
-                        {themesLoading ? "Triangulating…" : "🔺 Triangulate"}
-                      </button>
-                    )}
-                    <button className="mini" onClick={spotSpaceOpportunities} disabled={oppLoading} title="proactively surface follow-on / offering / BD opportunities">
-                      {oppLoading ? "Spotting…" : "✨ Spot opportunities"}
-                    </button>
-                    <button onClick={runSpaceQuery} disabled={spaceLoading || !spaceQuery.trim()}>
-                      {spaceLoading ? "Synthesising…" : "Ask across projects"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-              {opps && (
-                <div className="space-opps">
-                  {opps.length === 0 ? (
-                    <div className="hint">No clear opportunities surfaced.</div>
-                  ) : (
-                    opps.map((o, i) => (
-                      <div key={i} className="opp-card">
-                        <div className="opp-head">
-                          <span className={`opp-kind opp-${o.kind}`}>{o.kind}</span>
-                          <span className="opp-title">{o.title}</span>
-                        </div>
-                        <div className="opp-why">{o.rationale}</div>
-                        <div className="opp-action">→ {o.suggestedAction}</div>
-                        {o.projects.length > 0 && (
-                          <div className="opp-prov">{o.projects.map((p, j) => <span key={j} className="space-prov-chip">{p}</span>)}</div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-              {themes && (
-                <div className="space-themes">
-                  <div className="themes-head">🔺 Emergent signals — patterns weak in one engagement, strong across many</div>
-                  {themes.length === 0 ? (
-                    <div className="hint">No theme yet spans enough engagements to be emergent.</div>
-                  ) : (
-                    themes.map((t, i) => (
-                      <div key={i} className="theme-card">
-                        <div className="theme-top">
-                          <span className={`opp-kind route-${t.route}`}>{t.route}</span>
-                          <span className="theme-count">{t.support.count} engagements · {t.support.sectors.length} sector{t.support.sectors.length === 1 ? "" : "s"}</span>
-                        </div>
-                        <div className="theme-insight">{t.insight}</div>
-                        <div className="opp-action">→ {t.action}</div>
-                        <div className="theme-foot">
-                          <span className="theme-sectors">{t.support.sectors.join(" · ")}</span>
-                          <button className="mini" onClick={() => nominateTheme(t)} title="propose as firm knowledge (enters the review pipeline)">
-                            Nominate to firm memory
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-              {spaceLoading && <div className="hint">coarse → fine → extract per engagement → synthesise…</div>}
-              {spaceAnswer && (
-                <div className="space-answer">
-                  <div className="markdown">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{spaceAnswer.answer}</ReactMarkdown>
-                  </div>
-                  {spaceAnswer.projectsUsed.length > 0 && (
-                    <div className="space-provenance">
-                      <span className="space-prov-label">Drawn from {spaceAnswer.projectsUsed.length} engagements:</span>
-                      {spaceAnswer.projectsUsed.map((p) => (
-                        <span key={p.project} className="space-prov-chip" title={`${p.client} · ${p.sector}`}>
-                          {p.title}{p.client !== "(withheld)" ? ` · ${p.client}` : ""}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : (
           <div className="chat">
             {/* Engagement strip: the standing constraints frame, always visible.
                 Click to open engagement.md and edit the underlying constraints. */}
@@ -1658,7 +1758,6 @@ export default function Home() {
               <button onClick={send} disabled={loading || !input.trim()}>Send</button>
             </div>
           </div>
-          )}
         </div>
 
         {/* Right: Chats — the user's conversation history (click an answer's ▸ x-ray for what informed it) */}
@@ -1693,6 +1792,7 @@ export default function Home() {
           </div>
         </div>
       </div>
+      )}
 
       {/* ---- Proactive popup (bottom-right): the agent initiates ----
           Surfaces things that need the user — pending approvals (today buried in
@@ -1705,8 +1805,9 @@ export default function Home() {
         const props = proposals.filter((p) => !popupDismissed[p.id]);
         const noms = nominations.filter((n) => !popupDismissed[n.id]);
         const count = (showOffer ? 1 : 0) + props.length + noms.length;
-        // Hide during a guided scenario — the scenario guide owns the bottom-right.
-        if (count === 0 || activeScenario) return null;
+        // Hide during a guided scenario — the scenario guide owns the bottom-right —
+        // and off the Home/lens screens (the popup is delivery, project-scoped).
+        if (count === 0 || activeScenario || view !== "project") return null;
         return (
           <div className="nudge">
             <div className="nudge-head">

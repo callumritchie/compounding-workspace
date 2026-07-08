@@ -3,5 +3,8 @@
   "client": "harbor",
   "sector": "retail",
   "type": "strategy",
-  "status": "complete"
+  "status": "complete",
+  "team": [
+    "bob"
+  ]
 }

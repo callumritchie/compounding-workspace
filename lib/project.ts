@@ -26,6 +26,7 @@ export type ProjectConfig = {
   type: string; // e.g. strategy, diligence
   status: ProjectStatus; // in-progress | complete — a client can have several
   stakeholders: Stakeholder[]; // people on this project (drive the stakeholder scope)
+  team: string[]; // INTERNAL team member ids on this engagement — powers "your engagements" on Home
   memoryCount?: number; // active memories in this project's OWN scope — 0 ⇒ a "cold" project (set by listProjectConfigs)
 };
 
@@ -49,10 +50,13 @@ export async function getProjectConfig(projectId: string): Promise<ProjectConfig
       type: cfg.type ?? "unknown",
       status: cfg.status === "complete" ? "complete" : "in-progress",
       stakeholders: await resolveStakeholders(ids),
+      team: Array.isArray((cfg as { team?: unknown }).team)
+        ? ((cfg as { team?: unknown }).team as unknown[]).filter((t): t is string => typeof t === "string")
+        : [],
     };
   } catch {
     // Sensible default if a project has no config file yet.
-    return { id: projectId, name: projectId, client: projectId, sector: "unknown", type: "unknown", status: "in-progress", stakeholders: [] };
+    return { id: projectId, name: projectId, client: projectId, sector: "unknown", type: "unknown", status: "in-progress", stakeholders: [], team: [] };
   }
 }
 

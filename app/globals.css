@@ -224,7 +224,44 @@ html, body {
 .mem-controls .imp input[type="range"] { width: 120px; }
 .mem-actions { display: flex; gap: 6px; }
 
-/* Space (cross-project lens) view — replaces the chat column in Space mode */
+/* ---- Home hub ---- */
+.home-link { cursor: pointer; }
+.crumb { display: flex; align-items: center; gap: 8px; margin-left: 4px; font-size: 13px; }
+.crumb-home { background: none; border: none; color: var(--accent, #6b7cff); cursor: pointer; font-size: 13px; padding: 0; }
+.crumb-sep { color: var(--muted); }
+.crumb-proj { font-weight: 600; }
+.user-select { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+.home { flex: 1; overflow-y: auto; padding: 24px 28px; max-width: 1100px; margin: 0 auto; width: 100%; }
+.home-hero { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 20px; }
+.home-hero h2 { margin: 0; font-size: 22px; }
+.home-role { font-size: 13px; color: var(--muted); margin-left: 10px; }
+.home-section { margin-bottom: 28px; }
+.home-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.home-section-head h3 { margin: 0; font-size: 15px; }
+.home-toggle { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 5px; }
+.home-hint { font-size: 13px; color: var(--muted); margin: 0 0 12px; }
+.home-group-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 10px 0 6px; }
+.proj-grid, .lens-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.proj-card { text-align: left; border: 1px solid var(--border); border-radius: 10px; padding: 14px; background: var(--panel, rgba(0,0,0,0.02)); cursor: pointer; display: flex; flex-direction: column; gap: 6px; }
+.proj-card:hover { border-color: var(--accent, #6b7cff); }
+.proj-card.done { opacity: 0.82; }
+.proj-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.proj-card-name { font-weight: 600; font-size: 14px; }
+.proj-card-status { font-size: 11px; white-space: nowrap; }
+.proj-card-status.active { color: #2e7d32; }
+.proj-card-status.done { color: var(--muted); }
+.proj-card-meta { font-size: 12px; color: var(--muted); }
+.lens-card { text-align: left; border: 1px solid var(--border); border-radius: 10px; padding: 16px; background: var(--panel, rgba(0,0,0,0.02)); cursor: pointer; display: flex; flex-direction: column; gap: 6px; }
+.lens-card:hover { border-color: var(--accent, #6b7cff); }
+.lens-icon { font-size: 22px; }
+.lens-name { font-weight: 600; font-size: 14px; }
+.lens-meta { font-size: 12px; color: var(--muted); text-transform: capitalize; }
+.lens-card.lens-firm { border-left: 3px solid #c07ac0; }
+.lens-card.lens-sector { border-left: 3px solid #5aa0e0; }
+.lens-card.lens-account { border-left: 3px solid #5ab080; }
+.space-screen { flex: 1; overflow-y: auto; max-width: 900px; margin: 0 auto; width: 100%; }
+
+/* Space (cross-project lens) view */
 .lens-select { font-weight: 600; }
 .space-view { display: flex; flex-direction: column; gap: 12px; padding: 12px; overflow-y: auto; height: 100%; }
 .space-head { display: flex; flex-direction: column; gap: 2px; }

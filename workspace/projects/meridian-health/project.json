@@ -3,5 +3,9 @@
   "client": "meridian",
   "sector": "healthcare",
   "type": "diligence",
-  "status": "complete"
+  "status": "complete",
+  "team": [
+    "callum",
+    "bob"
+  ]
 }

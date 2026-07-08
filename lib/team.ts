@@ -13,12 +13,23 @@
    roles/permissions; here it's a tiny, legible table.
 --------------------------------------------------------------------------- */
 
-export type Role = "lead" | "analyst";
+// Delivery roles work INSIDE projects (lead, analyst). Intelligence roles work
+// ACROSS projects and never own delivery (sales, marketing) — their home is the
+// cross-project lenses, not a project workspace.
+export type Role = "lead" | "analyst" | "sales" | "marketing";
 
 export const TEAM: Record<string, { role: Role; label: string }> = {
   callum: { role: "lead", label: "Lead" },
   bob: { role: "analyst", label: "Analyst" },
+  dana: { role: "sales", label: "Sales / BD" },
+  mo: { role: "marketing", label: "Marketing" },
 };
+
+// Delivery roles land on their engagements; intelligence roles land on the lenses.
+export function isDeliveryRole(user: string): boolean {
+  const r = roleOf(user);
+  return r === "lead" || r === "analyst";
+}
 
 export function roleOf(user: string): Role {
   return TEAM[user]?.role ?? "analyst";
@@ -52,11 +63,13 @@ export function approvalBlockReason(user: string, scope: string): string | null 
 // to the team; the firm-wide lens (which combines every client) is leadership-only.
 // This is the query-time access boundary that complements de-identification.
 export function canAccessSpace(user: string, spaceType: "account" | "sector" | "firm"): boolean {
-  if (spaceType === "firm") return roleOf(user) === "lead";
-  return true;
+  // Firm-wide combines every client → the cross-client-authorised roles only
+  // (lead + the intelligence roles whose job it is). A delivery analyst can't.
+  if (spaceType === "firm") return ["lead", "sales", "marketing"].includes(roleOf(user));
+  return true; // account + sector open to all (cross-client results are de-identified)
 }
 
 export function spaceAccessBlockReason(user: string, spaceType: "account" | "sector" | "firm"): string | null {
   if (canAccessSpace(user, spaceType)) return null;
-  return "The firm-wide lens combines every client's data — only a Lead can query it.";
+  return "The firm-wide lens combines every client's data — it's limited to Leads and the sales/marketing team.";
 }

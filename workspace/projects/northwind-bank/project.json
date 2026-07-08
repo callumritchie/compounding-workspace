@@ -3,5 +3,8 @@
   "client": "northwind",
   "sector": "financial-services",
   "type": "strategy",
-  "status": "complete"
+  "status": "complete",
+  "team": [
+    "bob"
+  ]
 }

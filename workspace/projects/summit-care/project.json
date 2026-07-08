@@ -3,5 +3,8 @@
   "client": "summit",
   "sector": "healthcare",
   "type": "strategy",
-  "status": "complete"
+  "status": "complete",
+  "team": [
+    "bob"
+  ]
 }

@@ -3,5 +3,8 @@
   "client": "atlas",
   "sector": "financial-services",
   "type": "diligence",
-  "status": "complete"
+  "status": "complete",
+  "team": [
+    "bob"
+  ]
 }

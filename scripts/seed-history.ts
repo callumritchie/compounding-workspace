@@ -23,7 +23,7 @@ import path from "path";
 
 type Fixture = {
   id: string;
-  config: { name: string; client: string; sector: string; type: string; status: string; stakeholders?: string[] };
+  config: { name: string; client: string; sector: string; type: string; status: string; stakeholders?: string[]; team?: string[] };
   files: Record<string, string>;
 };
 
@@ -33,7 +33,7 @@ const FIXTURES: Fixture[] = [
   // ---- Healthcare (multiple clients → a real sector) -----------------------
   {
     id: "meridian-health",
-    config: { name: "Value-based care diligence", client: "meridian", sector: "healthcare", type: "diligence", status: "complete" },
+    config: { team: ["callum", "bob"], name: "Value-based care diligence", client: "meridian", sector: "healthcare", type: "diligence", status: "complete" },
     files: {
       "brief.md": `# Engagement brief — Meridian Health\n\nCommercial diligence on a value-based-care (VBC) transition for a regional hospital network. Question for the investment committee: is the 3-year margin case credible?\n`,
       "findings/key-findings.md": `# Key findings — Meridian VBC diligence\n\n- The base case (+3% margin over 3 years) relies on patient-volume assumptions that are **not stress-tested**. Under a realistic volume shift the case swings to roughly −2%.\n- **Reimbursement threshold risk is the largest, least-modelled downside.** Payers are tightening the "clinically actioned" bar; a program that only pencils out at current reimbursement is fragile.\n- Care-coordination staffing (cost-to-serve) is the second-order risk; the model assumed best-case ratios.\n\n## Recommendation\nProceed only with a stress-tested downside case and a reimbursement-contraction sensitivity. Lead the IC memo with the downside, not the upside.\n`,
@@ -41,7 +41,7 @@ const FIXTURES: Fixture[] = [
   },
   {
     id: "summit-care",
-    config: { name: "Chronic-care expansion strategy", client: "summit", sector: "healthcare", type: "strategy", status: "complete" },
+    config: { team: ["bob"], name: "Chronic-care expansion strategy", client: "summit", sector: "healthcare", type: "strategy", status: "complete" },
     files: {
       "brief.md": `# Engagement brief — Summit Care\n\nGrowth strategy for a chronic-care management (CCM) provider weighing a remote-monitoring (RPM) expansion.\n`,
       "synthesis/recommendation.md": `# Recommendation — Summit Care RPM expansion\n\nExpand RPM, but pair it with CCM rather than selling monitoring alone — the pairing is where retention and unit economics actually work.\n\n**The binding constraint is operational, not technical:** staffing the monitoring, triaging alerts, and routing exceptions. The programs that win are the ones with the lowest, most predictable **cost-to-serve** — not the ones charging the most.\n\nWe stress-tested against reimbursement contraction and cost-to-serve overrun; the plan holds only if staffing discipline is treated as the core competency. Convenience pricing was explicitly **not** built into the margin case — it is a patient-acquisition wedge, not a durable moat.\n`,
@@ -50,7 +50,7 @@ const FIXTURES: Fixture[] = [
   // ---- Financial services --------------------------------------------------
   {
     id: "northwind-bank",
-    config: { name: "Digital lending expansion", client: "northwind", sector: "financial-services", type: "strategy", status: "complete" },
+    config: { team: ["bob"], name: "Digital lending expansion", client: "northwind", sector: "financial-services", type: "strategy", status: "complete" },
     files: {
       "brief.md": `# Engagement brief — Northwind Bank\n\nStrategy for expanding into digital consumer lending. Sponsor is the CFO; the credit committee must approve.\n`,
       "synthesis/recommendation.md": `# Recommendation — Northwind digital lending\n\nExpand in two phases, gated on a **stress-tested downside**: the CFO and credit committee will not approve a growth case that only works in benign conditions.\n\nThe binding constraint is **finance's risk appetite**, not product readiness — the same pattern we see with hospital-network finance sponsors. Lead the board case with the downside (loss-rate shock, funding-cost spike), then the upside. An upside-only case stalls.\n`,
@@ -58,7 +58,7 @@ const FIXTURES: Fixture[] = [
   },
   {
     id: "atlas-payments",
-    config: { name: "Payments acquisition diligence", client: "atlas", sector: "financial-services", type: "diligence", status: "complete" },
+    config: { team: ["bob"], name: "Payments acquisition diligence", client: "atlas", sector: "financial-services", type: "diligence", status: "complete" },
     files: {
       "brief.md": `# Engagement brief — Atlas Payments\n\nBuy-side diligence on a payments processor. Is the target's take-rate durable?\n`,
       "findings/key-findings.md": `# Key findings — Atlas Payments diligence\n\n- The target's premium take-rate is a **convenience/onboarding wedge, not a moat** — it erodes when a lower-friction competitor appears. Do not build the deal case on it holding.\n- Durable margin sits in **cost-to-serve discipline** (fraud handling, support cost per merchant), which is under-invested.\n- Regulatory / interchange-cap risk is the largest downside and is thinly modelled.\n\n## Recommendation\nRe-underwrite with the convenience premium stripped out and a regulatory-downside sensitivity. Lead with the downside for the IC.\n`,
@@ -67,7 +67,7 @@ const FIXTURES: Fixture[] = [
   // ---- Retail / consumer ---------------------------------------------------
   {
     id: "harbor-retail",
-    config: { name: "Omnichannel growth strategy", client: "harbor", sector: "retail", type: "strategy", status: "complete" },
+    config: { team: ["bob"], name: "Omnichannel growth strategy", client: "harbor", sector: "retail", type: "strategy", status: "complete" },
     files: {
       "brief.md": `# Engagement brief — Harbor Retail\n\nOmnichannel growth strategy for a mid-market retailer weighing a paid-convenience delivery tier.\n`,
       "synthesis/recommendation.md": `# Recommendation — Harbor omnichannel\n\nUse the convenience tier to **acquire**, not to defend margin. Willingness-to-pay for convenience is real but fragile — it erodes fast once a lower-friction rival appears. **Convenience is a wedge, not a moat.**\n\nDurable margin comes from **cost-to-serve discipline** (fulfilment cost per order), the same pattern we've seen in healthcare RPM and in payments. Build the margin case on cost-to-serve, and stress-test the convenience-premium erosion explicitly.\n`,
