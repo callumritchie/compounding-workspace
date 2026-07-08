@@ -31,6 +31,13 @@ export function isDeliveryRole(user: string): boolean {
   return r === "lead" || r === "analyst";
 }
 
+// Delivery-health signals are DERIVED FROM INTERNAL-TEAM candour — "the team is
+// struggling". Surfacing that has trust implications, so it's gated to the delivery
+// lead (and a future practice role), never to sales/marketing or the firm tier.
+export function canSeeDeliveryHealth(user: string): boolean {
+  return ["lead", "practice"].includes(roleOf(user));
+}
+
 export function roleOf(user: string): Role {
   return TEAM[user]?.role ?? "analyst";
 }
