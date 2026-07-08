@@ -273,6 +273,13 @@ type SpaceAnswer = {
   spanned?: number;
 };
 type Opportunity = { title: string; kind: string; rationale: string; suggestedAction: string; projects: string[] };
+type EmergentTheme = {
+  insight: string;
+  route: string;
+  action: string;
+  support: { projects: string[]; clients: string[]; sectors: string[]; count: number };
+  evidence: string[];
+};
 type ImpactStats = {
   totalReuses: number;
   distinctInsights: number;
@@ -345,6 +352,8 @@ export default function Home() {
   const [spaceAnswer, setSpaceAnswer] = useState<SpaceAnswer | null>(null);
   const [opps, setOpps] = useState<Opportunity[] | null>(null);
   const [oppLoading, setOppLoading] = useState(false);
+  const [themes, setThemes] = useState<EmergentTheme[] | null>(null);
+  const [themesLoading, setThemesLoading] = useState(false);
   // Bottom-right proactive popup: which items the user has dismissed this session
   // (keyed by a stable id), and whether the whole popup is collapsed.
   const [popupDismissed, setPopupDismissed] = useState<Record<string, boolean>>({});
@@ -521,7 +530,32 @@ export default function Home() {
   }, []);
 
   // Clear the space results when switching lens.
-  useEffect(() => { setSpaceAnswer(null); setOpps(null); }, [spaceId]);
+  useEffect(() => { setSpaceAnswer(null); setOpps(null); setThemes(null); }, [spaceId]);
+
+  // Triangulation (G): compute emergent themes — patterns weak in any one engagement
+  // but strong across many. Firm-wide scan; Lead-only.
+  async function runTriangulate() {
+    if (themesLoading) return;
+    setThemesLoading(true);
+    setThemes(null);
+    try {
+      const d = await fetch(`/api/signals/emergent?user=${user}`).then((r) => r.json());
+      if (d?.error) { setSpaceAnswer({ answer: `🔒 ${d.error}`, projectsUsed: [] }); setThemes([]); }
+      else setThemes(d.themes ?? []);
+    } catch {
+      setThemes([]);
+    } finally {
+      setThemesLoading(false);
+    }
+  }
+  async function nominateTheme(t: EmergentTheme) {
+    const d = await fetch("/api/signals/nominate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ insight: t.insight, sectors: t.support.sectors, user }),
+    }).then((r) => r.json());
+    setMemNote(d?.ok ? `nominated to ${d.targetScope} — review in the Memory manager` : d?.error ?? "nomination failed");
+  }
 
   // If an analyst ends up on the firm-wide lens (e.g. after switching user), drop
   // back to Delivery — the firm lens is Lead-only.
@@ -1309,6 +1343,11 @@ export default function Home() {
                     </select>
                   </label>
                   <div className="space-ask-btns">
+                    {spaces.find((s) => s.id === spaceId)?.type === "firm" && (
+                      <button className="mini" onClick={runTriangulate} disabled={themesLoading} title="find emergent themes — weak in one engagement, strong across many">
+                        {themesLoading ? "Triangulating…" : "🔺 Triangulate"}
+                      </button>
+                    )}
                     <button className="mini" onClick={spotSpaceOpportunities} disabled={oppLoading} title="proactively surface follow-on / offering / BD opportunities">
                       {oppLoading ? "Spotting…" : "✨ Spot opportunities"}
                     </button>
@@ -1334,6 +1373,31 @@ export default function Home() {
                         {o.projects.length > 0 && (
                           <div className="opp-prov">{o.projects.map((p, j) => <span key={j} className="space-prov-chip">{p}</span>)}</div>
                         )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+              {themes && (
+                <div className="space-themes">
+                  <div className="themes-head">🔺 Emergent signals — patterns weak in one engagement, strong across many</div>
+                  {themes.length === 0 ? (
+                    <div className="hint">No theme yet spans enough engagements to be emergent.</div>
+                  ) : (
+                    themes.map((t, i) => (
+                      <div key={i} className="theme-card">
+                        <div className="theme-top">
+                          <span className={`opp-kind route-${t.route}`}>{t.route}</span>
+                          <span className="theme-count">{t.support.count} engagements · {t.support.sectors.length} sector{t.support.sectors.length === 1 ? "" : "s"}</span>
+                        </div>
+                        <div className="theme-insight">{t.insight}</div>
+                        <div className="opp-action">→ {t.action}</div>
+                        <div className="theme-foot">
+                          <span className="theme-sectors">{t.support.sectors.join(" · ")}</span>
+                          <button className="mini" onClick={() => nominateTheme(t)} title="propose as firm knowledge (enters the review pipeline)">
+                            Nominate to firm memory
+                          </button>
+                        </div>
                       </div>
                     ))
                   )}
