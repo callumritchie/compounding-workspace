@@ -143,3 +143,40 @@ export async function search(query: string, project: string, k = 5): Promise<Sea
     .all(q, k, project) as { file: string; text: string; distance: number }[];
   return rows.map((r) => ({ file: r.file, text: r.text, score: 1 - r.distance }));
 }
+
+export type CrossResult = SearchResult & { project: string };
+
+// Cross-project semantic search — the fine layer of cross-project retrieval.
+//   • projectIds = null  → search the WHOLE corpus (firm-wide).
+//   • projectIds = [...]  → per-project KNN (perProject cap each) then merge by
+//     score. Per-project retrieval + a cap is what gives BREADTH across engagements
+//     rather than depth in the one verbose project (the "diversity" problem at
+//     scale). Callers typically pass the top projects from searchCards() first.
+export async function searchProjects(
+  query: string,
+  projectIds: string[] | null,
+  opts?: { k?: number; perProject?: number }
+): Promise<CrossResult[]> {
+  await ensureDir();
+  const db = getDb();
+  const q = encode(await embedOne(query));
+  const k = opts?.k ?? 12;
+  const perProject = opts?.perProject ?? 3;
+
+  if (!projectIds) {
+    const rows = db
+      .prepare(`SELECT project, file, text, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ? ORDER BY distance`)
+      .all(q, k) as { project: string; file: string; text: string; distance: number }[];
+    return rows.map((r) => ({ project: r.project, file: r.file, text: r.text, score: 1 - r.distance }));
+  }
+
+  const stmt = db.prepare(
+    `SELECT project, file, text, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ? AND project = ? ORDER BY distance`
+  );
+  const merged: CrossResult[] = [];
+  for (const project of projectIds) {
+    const rows = stmt.all(q, perProject, project) as { project: string; file: string; text: string; distance: number }[];
+    for (const r of rows) merged.push({ project: r.project, file: r.file, text: r.text, score: 1 - r.distance });
+  }
+  return merged.sort((a, b) => b.score - a.score).slice(0, k);
+}

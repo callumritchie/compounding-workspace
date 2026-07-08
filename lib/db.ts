@@ -141,6 +141,28 @@ CREATE TABLE IF NOT EXISTS audit_log (
   detail    TEXT                                   -- JSON: before/after or notes
 );
 CREATE INDEX IF NOT EXISTS idx_audit_memory ON audit_log(memory_id);
+
+-- Project summary "cards": a compact, generated digest of each engagement (what it
+-- was, key findings, outcome). They're the COARSE layer of cross-project retrieval —
+-- a firm-wide question finds relevant PROJECTS via their cards first, then drills
+-- into those projects' chunks (see lib/cards.ts, lib/retrieval.ts).
+CREATE TABLE IF NOT EXISTS project_cards (
+  project      TEXT PRIMARY KEY,
+  client       TEXT,
+  sector       TEXT,
+  type         TEXT,
+  status       TEXT,
+  title        TEXT,
+  summary      TEXT,
+  key_findings TEXT,                               -- JSON string[]
+  outcome      TEXT,
+  updated      TEXT
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS cards_vec USING vec0(
+  project   TEXT PRIMARY KEY,
+  sector    TEXT,
+  embedding float[${MEM_DIM}] distance_metric=cosine
+);
 `;
 
 // sqlite-vec takes an embedding as a JSON array string.
