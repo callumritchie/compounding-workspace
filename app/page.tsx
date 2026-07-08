@@ -290,6 +290,7 @@ type EmergentTheme = {
   support: { projects: string[]; clients: string[]; sectors: string[]; count: number };
   evidence: string[];
 };
+type SectorDensity = { sector: string; projects: number; clients: number; cards: number; lessons: number; ready: boolean };
 type ImpactStats = {
   totalReuses: number;
   distinctInsights: number;
@@ -367,6 +368,12 @@ export default function Home() {
   const [oppLoading, setOppLoading] = useState(false);
   const [themes, setThemes] = useState<EmergentTheme[] | null>(null);
   const [themesLoading, setThemesLoading] = useState(false);
+  // Proactive Home briefing (firm-authorised roles): emergent signals to route +
+  // which sectors are dense enough to pitch. Loaded once per user on landing.
+  const [homeThemes, setHomeThemes] = useState<EmergentTheme[] | null>(null);
+  const [homeThemesLoading, setHomeThemesLoading] = useState(false);
+  const [readySectors, setReadySectors] = useState<SectorDensity[] | null>(null);
+  const briefingUserRef = useRef<string | null>(null);
   // Bottom-right proactive popup: which items the user has dismissed this session
   // (keyed by a stable id), and whether the whole popup is collapsed.
   const [popupDismissed, setPopupDismissed] = useState<Record<string, boolean>>({});
@@ -564,6 +571,34 @@ export default function Home() {
     if (!isDeliveryRoleClient(user)) setView("home");
   }, [user]);
 
+  // The route a user personally owns — used to flag "for you" signals on Home.
+  const myRoute = CLIENT_ROLES[user] === "sales" ? "sales" : CLIENT_ROLES[user] === "marketing" ? "marketing" : CLIENT_ROLES[user] === "lead" ? "leadership" : "";
+
+  // Proactive Home briefing: for firm-authorised roles, prefetch the emergent
+  // signals (slow, LLM) + sector readiness (fast) once when they land on Home.
+  useEffect(() => {
+    if (view !== "home" || !canAccessFirmClient(user)) return;
+    if (briefingUserRef.current === user) return; // already loaded for this persona
+    briefingUserRef.current = user;
+    setReadySectors(null);
+    setHomeThemes(null);
+    setHomeThemesLoading(true);
+    fetch(`/api/home/briefing?user=${user}`).then((r) => r.json()).then((d) => setReadySectors(d.sectors ?? [])).catch(() => setReadySectors([]));
+    fetch(`/api/signals/emergent?user=${user}`)
+      .then((r) => r.json())
+      .then((d) => setHomeThemes(d.themes ?? []))
+      .catch(() => setHomeThemes([]))
+      .finally(() => setHomeThemesLoading(false));
+  }, [view, user]);
+
+  // Open the lens for a given sector from the briefing (fall back to firm-wide).
+  function openSectorLens(sector: string) {
+    const s =
+      spaces.find((sp) => sp.type === "sector" && (sp.name.toLowerCase().includes(sector.toLowerCase()) || sp.id.includes(sector))) ??
+      spaces.find((sp) => sp.type === "firm");
+    if (s) openSpace(s.id);
+  }
+
   // Clear the space results when switching lens.
   useEffect(() => { setSpaceAnswer(null); setOpps(null); setThemes(null); }, [spaceId]);
 
@@ -592,10 +627,13 @@ export default function Home() {
     setMemNote(d?.ok ? `nominated to ${d.targetScope} — review in the Memory manager` : d?.error ?? "nomination failed");
   }
 
-  // If an analyst ends up on the firm-wide lens (e.g. after switching user), drop
-  // back to Delivery — the firm lens is Lead-only.
+  // If a user without firm access ends up on the firm-wide lens (e.g. after
+  // switching to an analyst), drop them back to Home.
   useEffect(() => {
-    if (spaceId && user !== "callum" && spaces.find((s) => s.id === spaceId)?.type === "firm") setSpaceId(null);
+    if (spaceId && !canAccessFirmClient(user) && spaces.find((s) => s.id === spaceId)?.type === "firm") {
+      setSpaceId(null);
+      setView("home");
+    }
   }, [user, spaceId, spaces]);
 
   // Proactively spot opportunities across the space's engagements (follow-on for
@@ -1448,6 +1486,52 @@ export default function Home() {
                   </div>
                 </>
               )}
+            </section>
+          )}
+
+          {canAccessFirmClient(user) && (
+            <section className="home-section home-briefing">
+              <div className="home-section-head">
+                <h3>🔔 Your briefing</h3>
+                <span className="home-role">signals surfaced across the firm — no query needed</span>
+              </div>
+              {readySectors && readySectors.some((s) => s.ready) && (
+                <div className="ready-row">
+                  {readySectors.filter((s) => s.ready).map((s) => (
+                    <button key={s.sector} className="ready-card" onClick={() => openSectorLens(s.sector)} title="open this sector lens">
+                      <span className="ready-sector">🟢 {s.sector.replace(/-/g, " ")}</span>
+                      <span className="ready-meta">{s.clients} clients · {s.cards} engagements · ready to pitch</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="briefing-signals">
+                {homeThemesLoading && <div className="hint">scanning the firm&apos;s work for emergent signals…</div>}
+                {!homeThemesLoading && homeThemes && homeThemes.length === 0 && (
+                  <div className="hint">No emergent signal yet spans enough engagements.</div>
+                )}
+                {memNote && <div className="hint briefing-note">{memNote}</div>}
+                {(homeThemes ?? [])
+                  .slice()
+                  .sort((a, b) => (b.route === myRoute ? 1 : 0) - (a.route === myRoute ? 1 : 0))
+                  .map((t, i) => (
+                    <div key={i} className={`theme-card ${t.route === myRoute ? "mine" : ""}`}>
+                      <div className="theme-top">
+                        <span className={`opp-kind route-${t.route}`}>{t.route}</span>
+                        {t.route === myRoute && <span className="for-you">for you</span>}
+                        <span className="theme-count">{t.support.count} engagements · {t.support.sectors.length} sector{t.support.sectors.length === 1 ? "" : "s"}</span>
+                      </div>
+                      <div className="theme-insight">{t.insight}</div>
+                      <div className="opp-action">→ {t.action}</div>
+                      <div className="theme-foot">
+                        <span className="theme-sectors">{t.support.sectors.join(" · ")}</span>
+                        <button className="mini" onClick={() => nominateTheme(t)} title="propose as firm knowledge (enters the review pipeline)">
+                          Nominate to firm memory
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
             </section>
           )}
 
