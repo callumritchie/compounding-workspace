@@ -396,11 +396,15 @@ export default function Home() {
   const [inboxLoading, setInboxLoading] = useState(false);
   const [dismissed, setDismissed] = useState<Record<string, boolean>>({});
   const [sigFeedback, setSigFeedback] = useState<Record<string, "helpful" | "not-useful">>({}); // per-signal reaction
-  const [sigExpanded, setSigExpanded] = useState<Record<string, boolean>>({}); // "⋯ more" open per signal
   const [readySectors, setReadySectors] = useState<SectorDensity[] | null>(null);
   const briefingUserRef = useRef<string | null>(null);
-  // Drafted artifacts, keyed by the signal's insight text (stable across re-sorts).
-  const [signalDrafts, setSignalDrafts] = useState<Record<string, { loading?: boolean; error?: string; title?: string; kind?: string; body?: string; saved?: string }>>({});
+  // Inbox: tab, filters, and the cross-everything query surface.
+  const [inboxTab, setInboxTab] = useState<"all" | "risk" | "opp" | "fyi">("all");
+  const [inboxSector, setInboxSector] = useState("all");
+  const [inboxClient, setInboxClient] = useState("all");
+  const [inboxQuery, setInboxQuery] = useState("");
+  const [inboxAnswer, setInboxAnswer] = useState<SpaceAnswer | null>(null);
+  const [inboxQueryLoading, setInboxQueryLoading] = useState(false);
   // Bottom-right proactive popup: which items the user has dismissed this session
   // (keyed by a stable id), and whether the whole popup is collapsed.
   const [popupDismissed, setPopupDismissed] = useState<Record<string, boolean>>({});
@@ -708,45 +712,7 @@ export default function Home() {
     setMemNote(d?.ok ? `nominated to ${d.targetScope} — review in the Memory manager` : d?.error ?? "nomination failed");
   }
 
-  // ---- Inbox signal actions (feedback-first; draft/flag under "⋯ more") ----
-  async function draftSignal(s: InboxSignal) {
-    const key = s.id;
-    if (signalDrafts[key]?.loading) return;
-    setSignalDrafts((d) => ({ ...d, [key]: { loading: true } }));
-    try {
-      const r = await fetch("/api/signals/draft", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          insight: s.title, route: s.route, action: s.detail,
-          sectors: s.support?.sectors ?? (s.sector ? [s.sector] : []),
-          count: s.support?.count ?? 1, evidence: s.evidence, user,
-        }),
-      }).then((r) => r.json());
-      if (r?.error) setSignalDrafts((d) => ({ ...d, [key]: { error: r.error } }));
-      else setSignalDrafts((d) => ({ ...d, [key]: { ...r.draft } }));
-    } catch {
-      setSignalDrafts((d) => ({ ...d, [key]: { error: "draft failed" } }));
-    }
-  }
-  async function saveAsset(s: InboxSignal) {
-    const draft = signalDrafts[s.id];
-    if (!draft?.body) return;
-    const r = await fetch("/api/signals/save-asset", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: draft.title, kind: draft.kind, body: draft.body, user }),
-    }).then((r) => r.json());
-    if (r?.ok) setSignalDrafts((d) => ({ ...d, [s.id]: { ...d[s.id], saved: r.path } }));
-  }
-  async function nominateSignal(s: InboxSignal) {
-    const d = await fetch("/api/signals/nominate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ insight: s.title, sectors: s.support?.sectors ?? (s.sector ? [s.sector] : []), user }),
-    }).then((r) => r.json());
-    setMemNote(d?.ok ? `nominated to ${d.targetScope} — review in the Memory manager` : d?.error ?? "nomination failed");
-  }
+  // ---- Inbox signal actions (feedback-first: helpful / not-useful / dismiss) ----
   async function dismissSignal(s: InboxSignal) {
     setDismissed((m) => ({ ...m, [s.id]: true }));
     fetch("/api/signals/status", {
@@ -774,26 +740,12 @@ export default function Home() {
     if (["buying", "competitive", "new-service-line"].includes(s.family)) return "opp";
     return "fyi";
   }
-  // Not every worthwhile signal is a pitch — some just need a conversation inside
-  // the team. A lightweight "flag" marks it actioned and acknowledges, no artifact.
-  async function flagInternal(s: InboxSignal) {
-    setMemNote(`flagged “${s.title}” for internal discussion`);
-    fetch("/api/signals/status", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: s.id, status: "actioned", user }),
-    }).catch(() => {});
-  }
-  // One signal card. Feedback-first: the headline actions are 👍 / 👎 / Dismiss
-  // (which teach the inbox what's worth surfacing); doing something with it —
-  // drafting, flagging internally, proposing a firm lesson — lives under "⋯ more"
-  // so the card never presumes a pitch is the next step.
+  // One signal card. Feedback-only: the actions are 👍 / 👎 / Dismiss, which teach
+  // the inbox what's worth surfacing. A card never presumes a next step beyond that.
   function renderSignalCard(s: InboxSignal) {
     const fm = familyMeta(s.family);
     const mine = s.route === myRoute;
-    const draft = signalDrafts[s.id];
     const fb = sigFeedback[s.id];
-    const expanded = sigExpanded[s.id];
     const alert = signalBucket(s) === "risk";
     return (
       <div key={s.id} className={`signal-card ${mine ? "mine" : ""} ${alert ? "alert" : ""}`}>
@@ -813,44 +765,8 @@ export default function Home() {
             <button className={`mini ${fb === "helpful" ? "primary" : ""}`} onClick={() => feedbackSignal(s, "helpful")} title="worth surfacing — teaches the inbox to keep signals like this">👍 Helpful</button>
             <button className="mini" onClick={() => feedbackSignal(s, "not-useful")} title="not worth surfacing — teaches the inbox and clears it">👎 Not useful</button>
             <button className="mini" onClick={() => dismissSignal(s)} title="clear from your inbox">Dismiss</button>
-            <button className="mini" onClick={() => setSigExpanded((m) => ({ ...m, [s.id]: !m[s.id] }))} title="do something with this signal">⋯ more</button>
           </div>
         </div>
-        {expanded && (
-          <div className="signal-more">
-            {s.actions.draft && (
-              <button className="mini" onClick={() => draftSignal(s)} disabled={draft?.loading} title="draft a note / POV from this signal, in place">
-                {draft?.loading ? "Drafting…" : "✍️ Draft a note"}
-              </button>
-            )}
-            <button className="mini" onClick={() => flagInternal(s)} title="raise this with the team — no artifact">🗣 Flag for internal discussion</button>
-            {s.actions.nominate && (
-              <button className="mini" onClick={() => nominateSignal(s)} title="propose as a reusable firm lesson (enters the review pipeline)">Propose as firm lesson</button>
-            )}
-          </div>
-        )}
-        {draft && !draft.loading && (
-          <div className="signal-draft">
-            {draft.error ? (
-              <div className="hint">⚠️ {draft.error}</div>
-            ) : (
-              <>
-                <div className="signal-draft-head">
-                  <span className="signal-draft-kind">{draft.kind}</span>
-                  <span className="signal-draft-title">{draft.title}</span>
-                  <div className="signal-draft-btns">
-                    <button className="mini" onClick={() => navigator.clipboard?.writeText(draft.body ?? "")}>Copy</button>
-                    <button className="mini" onClick={() => saveAsset(s)} disabled={!!draft.saved}>{draft.saved ? "Saved ✓" : "Save to library"}</button>
-                  </div>
-                </div>
-                <div className="markdown signal-draft-body">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{draft.body ?? ""}</ReactMarkdown>
-                </div>
-                {draft.saved && <div className="hint">saved to workspace/{draft.saved}</div>}
-              </>
-            )}
-          </div>
-        )}
       </div>
     );
   }
@@ -933,6 +849,28 @@ export default function Home() {
       setSpaceAnswer({ answer: "Something went wrong.", projectsUsed: [] });
     } finally {
       setSpaceLoading(false);
+    }
+  }
+
+  // Ask across EVERY engagement straight from the inbox — no need to click into a
+  // sector first. Routes through the firm-wide space so the answer is de-identified.
+  async function runInboxQuery() {
+    if (!inboxQuery.trim() || inboxQueryLoading) return;
+    const firmId = spaces.find((sp) => sp.type === "firm")?.id;
+    if (!firmId) return;
+    setInboxQueryLoading(true);
+    setInboxAnswer(null);
+    try {
+      const d = await fetch("/api/space/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spaceId: firmId, query: inboxQuery, audience: spaceAudience, user }),
+      }).then((r) => r.json());
+      setInboxAnswer(d?.error ? { answer: `🔒 ${d.error}`, projectsUsed: [] } : d);
+    } catch {
+      setInboxAnswer({ answer: "Something went wrong.", projectsUsed: [] });
+    } finally {
+      setInboxQueryLoading(false);
     }
   }
 
@@ -1793,34 +1731,111 @@ export default function Home() {
                   ))}
                 </div>
               )}
+              {/* Ask across EVERY engagement without clicking into a sector first. */}
+              <div className="inbox-ask">
+                <textarea
+                  value={inboxQuery}
+                  onChange={(e) => setInboxQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runInboxQuery(); } }}
+                  placeholder="Ask across every engagement… e.g. 'Where are we most exposed on delivery right now?'"
+                  rows={2}
+                />
+                <button onClick={runInboxQuery} disabled={inboxQueryLoading || !inboxQuery.trim()}>
+                  {inboxQueryLoading ? "Synthesising…" : "Ask across everything"}
+                </button>
+              </div>
+              {inboxQueryLoading && <div className="hint">coarse → fine → extract per engagement → synthesise…</div>}
+              {inboxAnswer && (
+                <div className="space-answer">
+                  <div className="markdown">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{inboxAnswer.answer}</ReactMarkdown>
+                  </div>
+                  {inboxAnswer.projectsUsed.length > 0 && (
+                    <div className="space-provenance">
+                      <span className="space-prov-label">Drawn from {inboxAnswer.projectsUsed.length} engagements:</span>
+                      {inboxAnswer.projectsUsed.map((p) => (
+                        <span key={p.project} className="space-prov-chip" title={`${p.client} · ${p.sector}`}>
+                          {p.title}{p.client !== "(withheld)" ? ` · ${p.client}` : ""}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="briefing-signals">
                 {inboxLoading && <div className="hint">scanning transcripts, risk registers &amp; offer gaps for signals…</div>}
-                {!inboxLoading && inboxSignals && inboxSignals.filter((s) => !dismissed[s.id]).length === 0 && (
-                  <div className="hint">No open signals right now — you&apos;re clear.</div>
-                )}
                 {memNote && <div className="hint briefing-note">{memNote}</div>}
-                {(() => {
-                  // Break the feed into a few triage buckets so it's scannable —
-                  // risks first, then opportunities, then lower-signal FYIs — each
-                  // still score-sorted within the bucket.
-                  const open = (inboxSignals ?? []).filter((s) => !dismissed[s.id]);
+                {!inboxLoading && inboxSignals && (() => {
+                  // Feed → tabs (All / Risks / Opportunities / FYI) + sector & client
+                  // filters, so you can browse everything in one place. Signals arrive
+                  // score-sorted from the server; we keep that order within each view.
+                  const all = inboxSignals.filter((s) => !dismissed[s.id]);
+                  const sectorOpts = Array.from(new Set(
+                    all.flatMap((s) => [s.sector, ...(s.support?.sectors ?? [])]).filter(Boolean) as string[]
+                  )).sort();
+                  const clientOpts = Array.from(new Set(
+                    all.flatMap((s) => [s.client, ...(s.support?.clients ?? [])]).filter(Boolean) as string[]
+                  )).sort();
+                  const matchesSector = (s: InboxSignal) =>
+                    inboxSector === "all" || s.sector === inboxSector || (s.support?.sectors ?? []).includes(inboxSector);
+                  const matchesClient = (s: InboxSignal) =>
+                    inboxClient === "all" || s.client === inboxClient || (s.support?.clients ?? []).includes(inboxClient);
+                  const open = all.filter((s) => matchesSector(s) && matchesClient(s));
+                  const tabs: { key: "all" | "risk" | "opp" | "fyi"; label: string }[] = [
+                    { key: "all", label: "All" },
+                    { key: "risk", label: "⚠ Risks" },
+                    { key: "opp", label: "✨ Opportunities" },
+                    { key: "fyi", label: "FYI" },
+                  ];
                   const buckets: { key: "risk" | "opp" | "fyi"; label: string; hint: string }[] = [
                     { key: "risk", label: "⚠ Risks to act on", hint: "delivery, retention & early-warning" },
                     { key: "opp", label: "✨ Opportunities", hint: "buying, competitive & new service lines" },
                     { key: "fyi", label: "FYI / needs review", hint: "lower-confidence intel & reference" },
                   ];
-                  return buckets.map((b) => {
-                    const items = open.filter((s) => signalBucket(s) === b.key);
-                    if (!items.length) return null;
-                    return (
-                      <div key={b.key} className="signal-bucket">
-                        <div className="signal-bucket-head">
-                          {b.label} <span className="signal-bucket-hint">{b.hint}</span>
+                  return (
+                    <>
+                      <div className="inbox-controls">
+                        <div className="inbox-tabs">
+                          {tabs.map((t) => (
+                            <button key={t.key} className={`inbox-tab ${inboxTab === t.key ? "active" : ""}`} onClick={() => setInboxTab(t.key)}>{t.label}</button>
+                          ))}
                         </div>
-                        {items.map(renderSignalCard)}
+                        <div className="inbox-filters">
+                          <select value={inboxSector} onChange={(e) => setInboxSector(e.target.value)}>
+                            <option value="all">All sectors</option>
+                            {sectorOpts.map((o) => <option key={o} value={o}>{o.replace(/-/g, " ")}</option>)}
+                          </select>
+                          <select value={inboxClient} onChange={(e) => setInboxClient(e.target.value)}>
+                            <option value="all">All clients</option>
+                            {clientOpts.map((o) => <option key={o} value={o}>{o}</option>)}
+                          </select>
+                        </div>
                       </div>
-                    );
-                  });
+                      {open.length === 0 ? (
+                        <div className="hint">No open signals match — you&apos;re clear.</div>
+                      ) : inboxTab === "all" ? (
+                        buckets.map((b) => {
+                          const items = open.filter((s) => signalBucket(s) === b.key);
+                          if (!items.length) return null;
+                          return (
+                            <div key={b.key} className="signal-bucket">
+                              <div className="signal-bucket-head">
+                                {b.label} <span className="signal-bucket-hint">{b.hint}</span>
+                              </div>
+                              {items.map(renderSignalCard)}
+                            </div>
+                          );
+                        })
+                      ) : (
+                        (() => {
+                          const items = open.filter((s) => signalBucket(s) === inboxTab);
+                          return items.length
+                            ? items.map(renderSignalCard)
+                            : <div className="hint">Nothing in this view right now.</div>;
+                        })()
+                      )}
+                    </>
+                  );
                 })()}
               </div>
             </section>
