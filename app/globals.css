@@ -340,6 +340,18 @@ html, body {
 .ready-meta { font-size: 11px; color: var(--muted); }
 .briefing-signals { display: flex; flex-direction: column; gap: 10px; }
 .briefing-note { color: #2e7d32; }
+/* Ask-across-everything box + inbox tabs/filters */
+.inbox-ask { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.inbox-ask textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; }
+.inbox-ask button { align-self: flex-start; border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer; }
+.inbox-ask button:disabled { opacity: .5; cursor: default; }
+.inbox-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.inbox-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.inbox-tab { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 999px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
+.inbox-tab:hover { border-color: var(--accent); color: var(--accent); }
+.inbox-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.inbox-filters { display: flex; gap: 6px; }
+.inbox-filters select { border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; font: inherit; font-size: 12px; background: var(--panel); color: var(--ink); }
 .theme-card.mine { border-left: 3px solid var(--accent, #6b7cff); }
 .for-you { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; color: var(--accent, #6b7cff); border: 1px solid currentColor; border-radius: 4px; padding: 1px 5px; }
 /* ---- Signal inbox cards ---- */
