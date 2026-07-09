@@ -594,7 +594,7 @@ export async function distillFacts(projectId: string, answers: { question: strin
    now) for the bottom-right nudge — capped + dismissible by design.
 --------------------------------------------------------------------------- */
 
-export type NextAction = { title: string; prompt: string; why: string };
+export type NextAction = { title: string; prompt: string; why: string; kind?: "action" | "question" };
 export type NextActions = {
   stage: { label: string; rationale: string };
   actions: NextAction[];
@@ -635,16 +635,20 @@ export async function inferNextActions(projectId: string, user: string, recent: 
     system:
       "You guide a consultant through a client engagement by inferring, from the real state below, WHERE the " +
       "project is and the best next moves. Write for a non-technical reader. Return STRICT JSON: " +
-      `{"stage":{"label":string,"rationale":string},"actions":[{"title":string,"prompt":string,"why":string}],"offer":{"title":string,"prompt":string,"why":string}}. ` +
+      `{"stage":{"label":string,"rationale":string},"actions":[{"title":string,"prompt":string,"why":string,"kind":"action"|"question"}],"offer":{"title":string,"prompt":string,"why":string}}. ` +
       "stage.label = a SHORT phase name that fits THIS specific project — engagements vary hugely, so name whatever " +
       "actually fits (e.g. 'Scoping', 'Stakeholder discovery', 'Diligence red-flags', 'Synthesis', 'Recommendation', " +
       "'Board-ready') rather than forcing a fixed pipeline. stage.rationale = one plain sentence citing the signals. " +
-      "actions = 3-4 GENUINELY DIFFERENT next steps (not variants of one), each: title (imperative, ≤6 words), " +
+      "actions = exactly 4 GENUINELY DIFFERENT items (not variants of one) that BLEND two kinds — roughly half " +
+      "kind:'action' (an imperative next step the agent should DO) and half kind:'question' (a relevant follow-on the " +
+      "user could ASK to see what this product can do for them: surface a hidden risk, stress-test the case, compare " +
+      "options, find a gap). Each item: title (≤6 words — imperative for actions, phrased as a question for questions), " +
       "prompt (the exact message to send the agent), why (one short clause grounded in the state, e.g. 'the COO " +
-      "interview isn't synthesised yet'). offer = the SINGLE most useful thing the agent could just do now on the " +
-      "user's behalf (same shape), or null if nothing clearly warrants it. Be concrete and grounded in the inputs; " +
+      "interview isn't synthesised yet'), kind. Questions must be as grounded and specific as actions — never generic. " +
+      "offer = the SINGLE most useful thing the agent could just do now on the " +
+      "user's behalf (same shape, no kind), or null if nothing clearly warrants it. Be concrete and grounded in the inputs; " +
       "never invent files or facts. If the engagement constraints show something under pressure (an at-risk milestone, " +
-      "budget strain, an out-of-scope ask), let that shape the stage and at least one action. JSON only, no preamble.",
+      "budget strain, an out-of-scope ask), let that shape the stage and at least one item. JSON only, no preamble.",
     messages: [
       {
         role: "user",
@@ -662,7 +666,12 @@ export async function inferNextActions(projectId: string, user: string, recent: 
   const cleanAction = (a: unknown): NextAction | null => {
     const o = a as Partial<NextAction>;
     return o && typeof o.title === "string" && typeof o.prompt === "string"
-      ? { title: o.title.trim(), prompt: o.prompt.trim(), why: typeof o.why === "string" ? o.why.trim() : "" }
+      ? {
+          title: o.title.trim(),
+          prompt: o.prompt.trim(),
+          why: typeof o.why === "string" ? o.why.trim() : "",
+          kind: o.kind === "question" ? "question" : "action",
+        }
       : null;
   };
   const result: NextActions = {

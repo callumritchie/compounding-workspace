@@ -236,7 +236,7 @@ type Nomination = {
 };
 // The "Compass": inferred engagement stage + diverse next-step suggestions + one
 // optional proactive offer (mirrors NextActions in lib/agent).
-type NextAction = { title: string; prompt: string; why: string };
+type NextAction = { title: string; prompt: string; why: string; kind?: "action" | "question" };
 type NextActions = { stage: { label: string; rationale: string }; actions: NextAction[]; offer: NextAction | null };
 // An agent from the roster (the harness config).
 type AgentItem = {
@@ -405,6 +405,10 @@ export default function Home() {
   // (keyed by a stable id), and whether the whole popup is collapsed.
   const [popupDismissed, setPopupDismissed] = useState<Record<string, boolean>>({});
   const [popupCollapsed, setPopupCollapsed] = useState(false);
+  // Project layout: the Files (left) and Chats (right) columns collapse to slim
+  // rails so the chat can reclaim the width. Per-session, no persistence.
+  const [filesCollapsed, setFilesCollapsed] = useState(false);
+  const [chatsCollapsed, setChatsCollapsed] = useState(false);
 
   // ---- Warm start (cold-start activation) ----
   // On a "cold" project (no memory of its own yet) we proactively show what the
@@ -441,6 +445,7 @@ export default function Home() {
   const [lifecycle, setLifecycle] = useState<{ stale: StaleItem[]; duplicates: DupPair[] }>({ stale: [], duplicates: [] });
   // Guided scenario demo mode.
   const [showScenarios, setShowScenarios] = useState(false);
+  const [showToolsMenu, setShowToolsMenu] = useState(false); // top-bar "⋯ Tools" dropdown
   const [showImpact, setShowImpact] = useState(false);
   const [impact, setImpact] = useState<ImpactStats | null>(null);
   function loadImpact() {
@@ -562,6 +567,34 @@ export default function Home() {
     if (activeChat && messages.length > 0 && !loading) loadNextActions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChat, project, user, messages.length, loading]);
+
+  // ---- Bottom-right nudge: the items the agent wants the user to see ----
+  // Built once here so the auto-collapse effect and the popup render agree. The
+  // proactive offer is SUPPRESSED when it just echoes a suggestion chip or the
+  // last reply — the popup should never repeat what's already on screen.
+  const offer = nextActions?.offer ?? null;
+  const offerId = offer ? `offer:${offer.title}` : "";
+  const lastReply = [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
+  const offerEchoes =
+    !!offer &&
+    ((nextActions?.actions ?? []).some((a) => a.prompt === offer.prompt || a.title === offer.title) ||
+      (offer.title.length > 3 && lastReply.toLowerCase().includes(offer.title.toLowerCase())));
+  const showOffer = !!offer && !popupDismissed[offerId] && !offerEchoes;
+  const nudgeItems: Array<
+    | { t: "offer"; id: string; offer: NextAction }
+    | { t: "prop"; id: string; p: Proposal }
+    | { t: "nom"; id: string; n: Nomination }
+  > = [
+    ...(showOffer && offer ? [{ t: "offer" as const, id: offerId, offer }] : []),
+    ...proposals.filter((p) => !popupDismissed[p.id]).map((p) => ({ t: "prop" as const, id: p.id, p })),
+    ...nominations.filter((n) => !popupDismissed[n.id]).map((n) => ({ t: "nom" as const, id: n.id, n })),
+  ];
+  // Auto-collapse when it gets busy (>2 items). Keyed on the COUNT only, so a user
+  // who manually expands isn't re-collapsed until the count actually changes.
+  useEffect(() => {
+    setPopupCollapsed(nudgeItems.length > 2);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nudgeItems.length]);
 
   // Load the engagement constraints strip for the active project. Refetch when the
   // engagement.md editor closes (openFile → null) so edits show immediately.
@@ -1648,21 +1681,38 @@ export default function Home() {
           </span>
         )}
         <div className="topbar-right">
-          {view === "project" && (
-            <>
-              <button className="queue-btn scenarios-btn" onClick={() => setShowScenarios(true)}>✨ Scenarios</button>
-              <button className="queue-btn" onClick={() => { loadAgents(); setShowAgents(true); }}>🤖 Agents</button>
-            </>
-          )}
-          <button
-            className="queue-btn"
-            onClick={() => { loadMemories(); loadProposals(); loadPromotions(); loadSignals(); loadLifecycle(); runMaintain(); setShowMemory(true); }}
-          >
-            🧠 Memory{proposals.length + nominations.length ? ` (${proposals.length + nominations.length})` : ""}
-          </button>
-          <button className="queue-btn" onClick={() => { loadImpact(); setShowImpact(true); }} title="how much firm knowledge is being reused across engagements">
-            📈 Impact
-          </button>
+          {/* One "Tools" menu holds Scenarios / Agents / Memory / Impact so the top
+              bar stays quiet. Pending-approval count rides the trigger so it's not lost. */}
+          {(() => {
+            const pending = proposals.length + nominations.length;
+            return (
+              <div className="tools">
+                <button className="queue-btn tools-trigger" onClick={() => setShowToolsMenu((v) => !v)} title="Workspace tools">
+                  ⋯ Tools
+                  {pending > 0 && <span className="tools-badge">{pending}</span>}
+                </button>
+                {showToolsMenu && (
+                  <>
+                    <div className="menu-overlay" onClick={() => setShowToolsMenu(false)} />
+                    <div className="tools-menu">
+                      {view === "project" && (
+                        <>
+                          <button onClick={() => { setShowToolsMenu(false); setShowScenarios(true); }}>✨ Scenarios</button>
+                          <button onClick={() => { setShowToolsMenu(false); loadAgents(); setShowAgents(true); }}>🤖 Agents</button>
+                        </>
+                      )}
+                      <button onClick={() => { setShowToolsMenu(false); loadMemories(); loadProposals(); loadPromotions(); loadSignals(); loadLifecycle(); runMaintain(); setShowMemory(true); }}>
+                        🧠 Memory{pending ? <span className="tools-badge inline">{pending}</span> : null}
+                      </button>
+                      <button onClick={() => { setShowToolsMenu(false); loadImpact(); setShowImpact(true); }} title="how much firm knowledge is being reused across engagements">
+                        📈 Impact
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })()}
           <div className="user-switch">
             <span className="subtitle">You are:</span>
             <select className="user-select" value={user} onChange={(e) => setUser(e.target.value as User)} title="switch persona">
@@ -1801,33 +1851,54 @@ export default function Home() {
 
       {/* ---- Project workspace: three panels ---- */}
       {view === "project" && (
-      <div className="panels">
-        {/* Left: Files (shared) */}
-        <div className="panel">
-          <div className="panel-header">Files · shared corpus</div>
-          <div className="panel-body">
-            <label className="upload">
-              {uploading ? "Uploading…" : "+ Upload PDF / text"}
-              <input type="file" accept=".pdf,.txt,.md" onChange={handleUpload} hidden disabled={uploading} />
-            </label>
-            {files.length === 0 && <div className="empty">No files yet.</div>}
-            {files.map((f) => (
-              <div key={f} className={`file ${openFile === f ? "active" : ""}`} onClick={() => openFileFn(f)}>
-                {f}
-              </div>
-            ))}
-
-            {openFile && (
-              <div className="viewer">
-                <header>
-                  <span>OPEN · {openFile}</span>
-                  <button title="close" onClick={() => { setOpenFile(null); setOpenContent(""); }}>×</button>
-                </header>
-                <pre>{openContent}</pre>
-              </div>
-            )}
+      <div
+        className="panels"
+        style={{
+          gridTemplateColumns: [
+            filesCollapsed ? "40px" : "240px",
+            openFile ? "minmax(300px, 360px)" : null,
+            "1fr",
+            chatsCollapsed ? "40px" : "300px",
+          ].filter(Boolean).join(" "),
+        }}
+      >
+        {/* Left: Files (shared) — collapses to a slim rail */}
+        {filesCollapsed ? (
+          <div className="panel rail" onClick={() => setFilesCollapsed(false)} title="Show files">
+            <button className="panel-collapse" title="Show files">›</button>
+            <span className="rail-label">Files{files.length ? ` · ${files.length}` : ""}</span>
           </div>
-        </div>
+        ) : (
+          <div className="panel">
+            <div className="panel-header">
+              <span>Files · shared corpus</span>
+              <button className="panel-collapse" title="Collapse files" onClick={() => setFilesCollapsed(true)}>‹</button>
+            </div>
+            <div className="panel-body">
+              <label className="upload">
+                {uploading ? "Uploading…" : "+ Upload PDF / text"}
+                <input type="file" accept=".pdf,.txt,.md" onChange={handleUpload} hidden disabled={uploading} />
+              </label>
+              {files.length === 0 && <div className="empty">No files yet.</div>}
+              {files.map((f) => (
+                <div key={f} className={`file ${openFile === f ? "active" : ""}`} onClick={() => openFileFn(f)}>
+                  {f}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* File viewer: its own drawer column between Files and Chat, only when a file is open */}
+        {openFile && (
+          <div className="panel file-drawer">
+            <div className="panel-header">
+              <span className="file-drawer-name" title={openFile}>{openFile.split("/").pop()}</span>
+              <button className="panel-collapse" title="Close file" onClick={() => { setOpenFile(null); setOpenContent(""); }}>×</button>
+            </div>
+            <pre className="file-drawer-body">{openContent}</pre>
+          </div>
+        )}
 
         {/* Centre: Chat */}
         <div className="panel">
@@ -2086,12 +2157,12 @@ export default function Home() {
                     {nextActions.actions.map((a, i) => (
                       <button
                         key={i}
-                        className="guide-send compass-chip"
+                        className={`guide-send compass-chip ${a.kind === "question" ? "question" : "action"}`}
                         disabled={loading || !activeChat}
                         title={a.why ? `Why: ${a.why}` : undefined}
                         onClick={() => sendText(a.prompt)}
                       >
-                        ▸ {a.title}
+                        {a.kind === "question" ? "❓" : "▸"} {a.title}
                       </button>
                     ))}
                   </div>
@@ -2125,9 +2196,17 @@ export default function Home() {
         </div>
 
         {/* Right: Chats — the user's conversation history (click an answer's ▸ x-ray for what informed it) */}
+        {chatsCollapsed ? (
+          <div className="panel rail" onClick={() => setChatsCollapsed(false)} title="Show chat history">
+            <button className="panel-collapse" title="Show chat history">‹</button>
+            <button className="rail-new" title="New chat" onClick={(e) => { e.stopPropagation(); newChat(); }}>＋</button>
+            <span className="rail-label">Chats{chats.length ? ` · ${chats.length}` : ""}</span>
+          </div>
+        ) : (
         <div className="panel">
           <div className="panel-header">
-            Chats · {user} · <span className="hdr-project">{projects.find((p) => p.id === project)?.name ?? project}</span>
+            <span>Chats · {user} · <span className="hdr-project">{projects.find((p) => p.id === project)?.name ?? project}</span></span>
+            <button className="panel-collapse" title="Collapse chat history" onClick={() => setChatsCollapsed(true)}>›</button>
           </div>
           <div className="panel-body">
             <button className="new-chat" onClick={newChat}>＋ New chat</button>
@@ -2155,6 +2234,7 @@ export default function Home() {
             )}
           </div>
         </div>
+        )}
       </div>
       )}
 
@@ -2163,15 +2243,13 @@ export default function Home() {
           the Memory manager) + at most ONE proactive offer. A corner toast: it
           never interrupts typing, and every item is dismissible. */}
       {(() => {
-        const offer = nextActions?.offer ?? null;
-        const offerId = offer ? `offer:${offer.title}` : "";
-        const showOffer = !!offer && !popupDismissed[offerId];
-        const props = proposals.filter((p) => !popupDismissed[p.id]);
-        const noms = nominations.filter((n) => !popupDismissed[n.id]);
-        const count = (showOffer ? 1 : 0) + props.length + noms.length;
+        const count = nudgeItems.length;
         // Hide during a guided scenario — the scenario guide owns the bottom-right —
         // and off the Home/lens screens (the popup is delivery, project-scoped).
         if (count === 0 || activeScenario || view !== "project") return null;
+        const CAP = 3;
+        const shown = nudgeItems.slice(0, CAP);
+        const hidden = count - shown.length;
         return (
           <div className="nudge">
             <div className="nudge-head">
@@ -2182,49 +2260,63 @@ export default function Home() {
             </div>
             {!popupCollapsed && (
               <div className="nudge-body">
-                {showOffer && offer && (
-                  <div className="nudge-item offer">
-                    <div className="nudge-kind">💡 I can do this now</div>
-                    <div className="nudge-title">{offer.title}</div>
-                    {offer.why && <div className="nudge-why">{offer.why}</div>}
-                    <div className="nudge-actions">
-                      <button
-                        className="promote"
-                        disabled={loading || !activeChat}
-                        onClick={() => { setPopupDismissed((s) => ({ ...s, [offerId]: true })); sendText(offer.prompt); }}
-                      >
-                        Do it
-                      </button>
-                      <button className="ghost" onClick={() => setPopupDismissed((s) => ({ ...s, [offerId]: true }))}>Not now</button>
+                {shown.map((it) => {
+                  if (it.t === "offer") {
+                    const offer = it.offer;
+                    return (
+                      <div key={it.id} className="nudge-item offer">
+                        <div className="nudge-kind">💡 I can do this now</div>
+                        <div className="nudge-title">{offer.title}</div>
+                        {offer.why && <div className="nudge-why">{offer.why}</div>}
+                        <div className="nudge-actions">
+                          <button
+                            className="promote"
+                            disabled={loading || !activeChat}
+                            onClick={() => { setPopupDismissed((s) => ({ ...s, [it.id]: true })); sendText(offer.prompt); }}
+                          >
+                            Do it
+                          </button>
+                          <button className="ghost" onClick={() => setPopupDismissed((s) => ({ ...s, [it.id]: true }))}>Not now</button>
+                        </div>
+                      </div>
+                    );
+                  }
+                  if (it.t === "prop") {
+                    const p = it.p;
+                    return (
+                      <div key={it.id} className="nudge-item">
+                        <div className="nudge-kind">💡 Save to the team’s memory?</div>
+                        <div className="nudge-title">“{p.fact}”</div>
+                        <div className="nudge-why">{p.scope} · suggested by {p.proposedBy}</div>
+                        <div className="nudge-actions">
+                          {canApproveScope(user, p.scope) ? (
+                            <button className="promote" onClick={() => { approveProp(p.id); setPopupDismissed((s) => ({ ...s, [p.id]: true })); }}>Approve</button>
+                          ) : (
+                            <span className="lock-note">🔒 needs a Lead</span>
+                          )}
+                          <button className="ghost" onClick={() => { dismissProp(p.id); setPopupDismissed((s) => ({ ...s, [p.id]: true })); }}>Dismiss</button>
+                        </div>
+                      </div>
+                    );
+                  }
+                  const n = it.n;
+                  return (
+                    <div key={it.id} className="nudge-item">
+                      <div className="nudge-kind">⬆ Promote a lesson?</div>
+                      <div className="nudge-title">“{n.fact}”</div>
+                      <div className="nudge-why">to {n.targetScope} · needs generalising first</div>
+                      <div className="nudge-actions">
+                        <button className="promote" onClick={openPending}>Review</button>
+                        <button className="ghost" onClick={() => setPopupDismissed((s) => ({ ...s, [n.id]: true }))}>Later</button>
+                      </div>
                     </div>
-                  </div>
+                  );
+                })}
+                {hidden > 0 && (
+                  <button className="nudge-more" onClick={openPending}>
+                    +{hidden} more in 🧠 Memory
+                  </button>
                 )}
-                {props.map((p) => (
-                  <div key={p.id} className="nudge-item">
-                    <div className="nudge-kind">💡 Save to the team’s memory?</div>
-                    <div className="nudge-title">“{p.fact}”</div>
-                    <div className="nudge-why">{p.scope} · suggested by {p.proposedBy}</div>
-                    <div className="nudge-actions">
-                      {canApproveScope(user, p.scope) ? (
-                        <button className="promote" onClick={() => { approveProp(p.id); setPopupDismissed((s) => ({ ...s, [p.id]: true })); }}>Approve</button>
-                      ) : (
-                        <span className="lock-note">🔒 needs a Lead</span>
-                      )}
-                      <button className="ghost" onClick={() => { dismissProp(p.id); setPopupDismissed((s) => ({ ...s, [p.id]: true })); }}>Dismiss</button>
-                    </div>
-                  </div>
-                ))}
-                {noms.map((n) => (
-                  <div key={n.id} className="nudge-item">
-                    <div className="nudge-kind">⬆ Promote a lesson?</div>
-                    <div className="nudge-title">“{n.fact}”</div>
-                    <div className="nudge-why">to {n.targetScope} · needs generalising first</div>
-                    <div className="nudge-actions">
-                      <button className="promote" onClick={openPending}>Review</button>
-                      <button className="ghost" onClick={() => setPopupDismissed((s) => ({ ...s, [n.id]: true }))}>Later</button>
-                    </div>
-                  </div>
-                ))}
               </div>
             )}
           </div>
