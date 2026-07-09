@@ -8,9 +8,18 @@
    internal-team candour) and cross-client reads are de-identified. */
 
 import { buildInbox } from "@/lib/signals/inbox";
+import { getAnnotationsFor } from "@/lib/signals/annotations";
+import { assessSignal } from "@/lib/signals/assess";
 
 export async function GET(req: Request) {
   const user = new URL(req.url).searchParams.get("user") ?? "unknown";
   const { signals, deIdentified } = await buildInbox(user);
-  return Response.json({ signals, deIdentified });
+  // Make each insight's confidence AUDITABLE: attach a faithful read of the drivers
+  // behind its rating + a counter-check, computed only from fields it already carries.
+  const assessed = signals.map((s) => ({ ...s, assessment: assessSignal(s) }));
+  // Attach the shared human layer: every teammate's notes on these insights, and a
+  // per-signal rollup flagging any that the team has nullified. One round-trip so
+  // the surfaced feed and its collective annotations always render together.
+  const annotations = getAnnotationsFor(signals.map((s) => s.id));
+  return Response.json({ signals: assessed, deIdentified, annotations });
 }

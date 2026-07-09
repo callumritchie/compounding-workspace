@@ -27,6 +27,20 @@ const client = new Anthropic();
 const FAST_MODEL = "claude-haiku-4-5"; // per-project extraction (map)
 const MODEL = "claude-opus-4-8"; // cross-project synthesis (reduce)
 
+// Server-side web search tool. Server-executed within the same request, so results
+// come back as web_search_tool_result blocks — they never touch the corpus or memory.
+const WEB_SEARCH_TOOL = { type: "web_search_20260209", name: "web_search", max_uses: 5 } as const;
+// Appended to the synthesiser's system prompt only when the user opted in. Unlike the
+// chat guardrail it PERMITS blending external context with firm evidence — that's the
+// point here (fresh stories/reports about clients, sectors, trends, needs) — but it
+// must stay clearly labelled and never masquerade as the firm's own research.
+const WEB_SEARCH_GUARDRAIL =
+  "EXTERNAL WEB SEARCH is enabled. You may look up fresh outside context — recent stories, reports, market/sector " +
+  "developments, competitor moves — and SYNTHESISE it with the firm's evidence to answer the question. Rules: search " +
+  "only for context that genuinely lives outside the engagements' files; label anything from the web as '🌐 EXTERNAL' " +
+  "and keep the firm's grounded findings clearly distinct from external context; never present external material as the " +
+  "firm's own research. If web search isn't clearly useful, answer from the evidence alone. ";
+
 export type ProjectEvidence = { project: string; card: ProjectCard | null; evidence: string; passages: CrossResult[] };
 export type CrossAnswer = { answer: string; projectsUsed: { project: string; title: string; client: string; sector: string }[] };
 
@@ -80,7 +94,7 @@ async function extractEvidence(query: string, project: string, card: ProjectCard
 export async function answerAcross(
   query: string,
   scope: { projectIds?: string[]; sectors?: string[] } | undefined,
-  opts?: { projects?: number; perProject?: number; abstract?: boolean; audience?: string }
+  opts?: { projects?: number; perProject?: number; abstract?: boolean; audience?: string; webSearch?: boolean }
 ): Promise<CrossAnswer> {
   const groups = await retrieveAcross(query, scope, opts);
   const extracts = await Promise.all(
@@ -108,6 +122,7 @@ export async function answerAcross(
       "('across our healthcare work…'). Aggregate rather than quote any single engagement. "
     : "";
   const audience = opts?.audience ? `Write for a ${opts.audience} audience. ` : "";
+  const webGuidance = opts?.webSearch ? WEB_SEARCH_GUARDRAIL : "";
 
   const response = await client.messages.create({
     model: MODEL,
@@ -118,12 +133,20 @@ export async function answerAcross(
       "claim ('seen in N of the engagements here'). Be concise and decision-useful. " +
       guidance +
       audience +
+      webGuidance +
       "End with a short 'Drawn from:' line listing the engagements you used.",
     messages: [{ role: "user", content: `Question: ${query}\n\nEvidence by engagement:\n\n${blocks}\n\nAnswer:` }],
+    ...(opts?.webSearch ? { tools: [WEB_SEARCH_TOOL] } : {}),
   });
-  const text = response.content.find((b) => b.type === "text");
+  // Join every text block: with web search on, the model interleaves text with
+  // server_tool_use / web_search_tool_result blocks, so the answer spans several.
+  const text = response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("")
+    .trim();
   return {
-    answer: text && text.type === "text" ? text.text.trim() : "",
+    answer: text,
     projectsUsed: used.map((e) => ({
       project: e.project,
       title: e.card?.title ?? e.project,
