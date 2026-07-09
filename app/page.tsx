@@ -309,7 +309,14 @@ type InboxSignal = {
   soft: boolean;
   deIdentified: boolean;
   actions: { draft: boolean; nominate: boolean };
+  assessment?: SignalAssessment; // auditable confidence read (mirror of lib/signals/assess)
 };
+// Auditable confidence: the real drivers behind a rating + the counter-check.
+type ConfFactor = { label: string; status: "strong" | "moderate" | "weak"; detail: string };
+type SignalAssessment = { band: "high" | "medium" | "low"; factors: ConfFactor[]; caveats: string[] };
+// The shared human layer over a surfaced insight (mirror of lib/signals/annotations).
+type Annotation = { id: number; signalId: string; author: string; kind: "context" | "correction" | "nullify"; body: string; ts: string };
+type AnnotationRollup = { notes: Annotation[]; count: number; nullified: boolean; nullifiedBy?: string; nullifyReason?: string };
 type ImpactStats = {
   totalReuses: number;
   distinctInsights: number;
@@ -378,6 +385,10 @@ export default function Home() {
   // Navigation altitude: "home" is the hub (your engagements + the cross-project
   // lenses); "project" is inside one engagement (files · chat · history).
   const [view, setView] = useState<"home" | "project" | "space">("home");
+  // Home is split into two altitudes: "projects" (your engagements — delivery) and
+  // "interrogate" (cross-engagement querying for sales/marketing/delivery/BD, with
+  // optional external web search blended into firm data).
+  const [homeTab, setHomeTab] = useState<"projects" | "interrogate">("projects");
   const [showAllProjects, setShowAllProjects] = useState(false); // leads: mine vs all
   // Lens: the active cross-project Space id (account/sector/firm), used on Home.
   const [spaces, setSpaces] = useState<{ id: string; name: string; type: string; projects: number }[]>([]);
@@ -405,6 +416,15 @@ export default function Home() {
   const [inboxQuery, setInboxQuery] = useState("");
   const [inboxAnswer, setInboxAnswer] = useState<SpaceAnswer | null>(null);
   const [inboxQueryLoading, setInboxQueryLoading] = useState(false);
+  // Surfaced feed (redesign): confidence is the throttle (default High); evidence
+  // expands per-insight; annotations are the shared human layer keyed by signal id.
+  const [inboxMinConf, setInboxMinConf] = useState<"high" | "medium" | "all">("high");
+  const [annById, setAnnById] = useState<Record<string, AnnotationRollup>>({});
+  const [expandedSig, setExpandedSig] = useState<Record<string, boolean>>({});
+  const [noteOpenFor, setNoteOpenFor] = useState<string | null>(null);
+  const [noteText, setNoteText] = useState("");
+  const [noteKind, setNoteKind] = useState<"context" | "correction" | "nullify">("context");
+  const [notePosting, setNotePosting] = useState(false);
   // Bottom-right proactive popup: which items the user has dismissed this session
   // (keyed by a stable id), and whether the whole popup is collapsed.
   const [popupDismissed, setPopupDismissed] = useState<Record<string, boolean>>({});
@@ -461,7 +481,7 @@ export default function Home() {
   // Agent roster (the harness): the list, the tool catalogue, and the modal state.
   const [agents, setAgents] = useState<AgentItem[]>([]);
   const [allTools, setAllTools] = useState<{ name: string; description: string }[]>([]);
-  const [defaultAgentId, setDefaultAgentId] = useState("consulting-teammate");
+  const [defaultAgentId, setDefaultAgentId] = useState("lead-consultant");
   const [showAgents, setShowAgents] = useState(false);
   const [agentDraft, setAgentDraft] = useState<AgentItem | null>(null);
 
@@ -671,7 +691,7 @@ export default function Home() {
     fetch(`/api/home/briefing?user=${user}`).then((r) => r.json()).then((d) => setReadySectors(d.sectors ?? [])).catch(() => setReadySectors([]));
     fetch(`/api/signals/inbox?user=${user}`)
       .then((r) => r.json())
-      .then((d) => setInboxSignals(d.signals ?? []))
+      .then((d) => { setInboxSignals(d.signals ?? []); setAnnById(d.annotations ?? {}); })
       .catch(() => setInboxSignals([]))
       .finally(() => setInboxLoading(false));
   }, [view, user]);
@@ -732,6 +752,28 @@ export default function Home() {
       body: JSON.stringify({ id: s.id, family: s.family, reaction, user }),
     }).catch(() => {});
   }
+  // Leave a SHARED note on a surfaced insight — extra context, a correction, or a
+  // nullification. Persisted server-side and visible to the whole team; a nullify
+  // retires the insight for everyone (kept with author + reason). Optimistically
+  // merges the returned rollup so the thread updates without a full reload.
+  async function annotateSignal(signalId: string, kind: "context" | "correction" | "nullify", text: string) {
+    const body = text.trim();
+    if (!body || notePosting) return;
+    setNotePosting(true);
+    try {
+      const d = await fetch("/api/signals/annotate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user, signalId, kind, body }),
+      }).then((r) => r.json());
+      if (d?.rollup) setAnnById((m) => ({ ...m, [signalId]: d.rollup }));
+      setNoteOpenFor(null);
+      setNoteText("");
+      setNoteKind("context");
+    } finally {
+      setNotePosting(false);
+    }
+  }
   // Which triage bucket a signal belongs to. Low-confidence intel always drops to
   // FYI; otherwise delivery/retention risks vs. growth opportunities vs. the rest.
   function signalBucket(s: InboxSignal): "risk" | "opp" | "fyi" {
@@ -740,33 +782,140 @@ export default function Home() {
     if (["buying", "competitive", "new-service-line"].includes(s.family)) return "opp";
     return "fyi";
   }
-  // One signal card. Feedback-only: the actions are 👍 / 👎 / Dismiss, which teach
-  // the inbox what's worth surfacing. A card never presumes a next step beyond that.
-  function renderSignalCard(s: InboxSignal) {
-    const fm = familyMeta(s.family);
+  // One surfaced INSIGHT — evidence-first. Leads with the finding + an auditable
+  // confidence read (meter + a rationale derived from real fields: how many
+  // engagements support it, freshness, direct-vs-soft). Evidence expands to the
+  // verbatim quotes + provenance. Below sits the SHARED annotation layer: the
+  // team's notes and a composer to sharpen or nullify. Ends at the insight — no
+  // downstream actions in this version.
+  function renderInsightCard(s: InboxSignal) {
+    const cm = confMeta(s.confidence);
     const mine = s.route === myRoute;
-    const fb = sigFeedback[s.id];
-    const alert = signalBucket(s) === "risk";
+    const kind = groupMeta(s.family).kind;
+    const roll = annById[s.id];
+    const notes = roll?.notes ?? [];
+    const nullified = roll?.nullified ?? false;
+    const open = !!expandedSig[s.id];
+    const composerOpen = noteOpenFor === s.id;
+    const rationale = confRationale(s);
     return (
-      <div key={s.id} className={`signal-card ${mine ? "mine" : ""} ${alert ? "alert" : ""}`}>
-        <div className="signal-top">
-          <span className="sig-family">{fm.icon} {fm.label}</span>
-          {mine && <span className="for-you">for you</span>}
-          {s.soft && <span className="sig-soft" title="low-confidence intel — review before acting">needs review</span>}
-          {s.deIdentified && <span className="space-abstract" title="combined across several clients, with client names removed">🛡 anonymised</span>}
-          <span className="sig-meta">{s.ageDays != null ? `${ageLabel(s.ageDays)} · ` : ""}conf {Math.round(s.confidence * 100)}%</span>
-        </div>
-        <div className="signal-title">{s.title}</div>
-        <div className="signal-detail">{s.detail}</div>
-        {s.evidence[0] && <div className="signal-evidence">“{s.evidence[0]}”</div>}
-        <div className="signal-foot">
-          {s.support?.sectors && <span className="theme-sectors">{s.support.sectors.join(" · ")}</span>}
-          <div className="theme-actions">
-            <button className={`mini ${fb === "helpful" ? "primary" : ""}`} onClick={() => feedbackSignal(s, "helpful")} title="worth surfacing — teaches the inbox to keep signals like this">👍 Helpful</button>
-            <button className="mini" onClick={() => feedbackSignal(s, "not-useful")} title="not worth surfacing — teaches the inbox and clears it">👎 Not useful</button>
-            <button className="mini" onClick={() => dismissSignal(s)} title="clear from your inbox">Dismiss</button>
+      <div key={s.id} className={`insight kind-${kind} ${nullified ? "retired" : ""}`}>
+        {nullified && (
+          <div className="insight-retired-banner">
+            ⦸ Retired by {USER_NAMES[roll!.nullifiedBy ?? ""] ?? roll!.nullifiedBy}
+            {roll!.nullifyReason ? <> — “{roll!.nullifyReason}”</> : null}
           </div>
+        )}
+        <div className="insight-head">
+          <span className={`kind-pill kind-${kind}`}>{groupMeta(s.family).label}</span>
+          {mine && <span className="for-you">for your desk</span>}
+          {s.deIdentified && <span className="anon-tag" title="combined across several clients, with client names removed">🛡 de-identified</span>}
         </div>
+        <div className="insight-title">{s.title}</div>
+        <div className="insight-detail">{s.detail}</div>
+
+        <div className="conf-row">
+          <span className={`conf-badge conf-${cm.level}`}><span className="conf-meter">{cm.meter}</span> {cm.label}</span>
+          <span className="conf-why">{rationale}</span>
+        </div>
+
+        <button className={`ev-toggle ${open ? "open" : ""}`} onClick={() => setExpandedSig((m) => ({ ...m, [s.id]: !open }))}>
+          {open ? "Hide evidence ▴" : `Evidence ▾${s.evidence.length ? ` · ${s.evidence.length}` : ""}`}
+        </button>
+        {open && (
+          <div className="ev-trail">
+            {/* Why this rating — the real drivers, graded (auditable confidence). */}
+            {s.assessment && s.assessment.factors.length > 0 && (
+              <div className="ev-why">
+                <div className="ev-sub-h">Why rated {cm.label.replace(" confidence", "")}</div>
+                <div className="factors">
+                  {s.assessment.factors.map((f, i) => (
+                    <div className={`factor fac-${f.status}`} key={i}>
+                      <span className="fac-dot">{f.status === "strong" ? "✓" : f.status === "moderate" ? "~" : "!"}</span>
+                      <span className="fac-label">{f.label}</span>
+                      <span className="fac-detail">{f.detail}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Verbatim provenance. */}
+            <div className="ev-sub-h">Evidence</div>
+            {s.evidence.length === 0 && <div className="ev-empty">No verbatim excerpts attached to this signal.</div>}
+            {s.evidence.map((q, i) => (
+              <div className="ev-line" key={i}>
+                <span className="ev-kind">{s.deIdentified ? "Pattern" : "Internal"}</span>
+                <span className="ev-quote">“{q}”</span>
+              </div>
+            ))}
+            {s.support && (s.support.count || s.support.sectors?.length) && (
+              <div className="ev-support">
+                Corroboration: {s.support.count ? <b>{s.support.count} engagement{s.support.count === 1 ? "" : "s"}</b> : "—"}
+                {s.support.sectors?.length ? <> · {s.support.sectors.join(" · ")}</> : null}
+                {s.support.clients?.length ? <> · {s.support.clients.join(" · ")}</> : null}
+              </div>
+            )}
+            {/* Counter-check — what would challenge or strengthen it. */}
+            {s.assessment && (
+              s.assessment.caveats.length > 0 ? (
+                <div className="counter">
+                  <div className="counter-h">✓ Stress-tested against</div>
+                  <ul>{s.assessment.caveats.map((c, i) => <li key={i}>{c}</li>)}</ul>
+                </div>
+              ) : (
+                <div className="counter counter-ok">
+                  <div className="counter-h">✓ Stress-tested</div>
+                  <p>Nothing in the surfaced evidence undercuts this.</p>
+                </div>
+              )
+            )}
+          </div>
+        )}
+
+        {/* Shared human layer — visible to everyone */}
+        {notes.length > 0 && (
+          <div className="notes">
+            {notes.map((n) => (
+              <div className={`note-item note-${n.kind}`} key={n.id}>
+                <span className="note-who">{USER_NAMES[n.author] ?? n.author}</span>
+                <span className={`note-kind nk-${n.kind}`}>{n.kind}</span>
+                <span className="note-body">{n.body}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="insight-foot">
+          <button className="note-add" onClick={() => { setNoteOpenFor(composerOpen ? null : s.id); setNoteText(""); setNoteKind("context"); }}>
+            💬 {notes.length ? `${notes.length} note${notes.length === 1 ? "" : "s"} · add` : "Add a note"}
+          </button>
+          {!nullified && <button className="dismiss-mini" onClick={() => dismissSignal(s)} title="clear from your own inbox (doesn't affect the team)">Dismiss for me</button>}
+        </div>
+        {composerOpen && (
+          <div className="note-composer">
+            <div className="note-kinds">
+              {(["context", "correction", "nullify"] as const).map((k) => (
+                <button key={k} className={`note-kind-pick nk-${k} ${noteKind === k ? "active" : ""}`} onClick={() => setNoteKind(k)}>
+                  {k === "context" ? "Add context" : k === "correction" ? "Correct" : "Nullify"}
+                </button>
+              ))}
+            </div>
+            <textarea
+              value={noteText}
+              onChange={(e) => setNoteText(e.target.value)}
+              placeholder={noteKind === "nullify" ? "Why should this be retired for the team?" : noteKind === "correction" ? "What's off, and what's the correction?" : "Add context that sharpens this insight…"}
+              rows={2}
+            />
+            <div className="note-composer-foot">
+              <span className="note-shared-hint">🌐 visible to the whole team</span>
+              <div className="note-composer-actions">
+                <button className="ghost" onClick={() => setNoteOpenFor(null)}>Cancel</button>
+                <button className="note-post" disabled={notePosting || !noteText.trim()} onClick={() => annotateSignal(s.id, noteKind, noteText)}>
+                  {notePosting ? "Posting…" : "Post note"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -790,6 +939,43 @@ export default function Home() {
     if (days === 1) return "1 day ago";
     if (days < 14) return `${days} days ago`;
     return `${Math.round(days / 7)} weeks ago`;
+  }
+  // Confidence as a measured scale: a 5-dot meter + High/Medium/Low band. High is
+  // the default surfacing bar (see inboxMinConf), so a trustworthy read shows first.
+  const CONF_HIGH = 0.7;
+  const CONF_MED = 0.5;
+  function confMeta(c: number): { level: "high" | "medium" | "low"; label: string; meter: string } {
+    const filled = Math.max(1, Math.min(5, Math.round(c * 5)));
+    const meter = "●".repeat(filled) + "○".repeat(5 - filled);
+    const level = c >= CONF_HIGH ? "high" : c >= CONF_MED ? "medium" : "low";
+    return { level, label: level === "high" ? "High confidence" : level === "medium" ? "Medium confidence" : "Low confidence", meter };
+  }
+  // Auditable "why": a rationale built only from REAL fields — no invented scoring.
+  function confRationale(s: InboxSignal): string {
+    const bits: string[] = [];
+    if (s.support?.count) bits.push(`${s.support.count} engagement${s.support.count === 1 ? "" : "s"}`);
+    if (s.ageDays != null) bits.push(s.ageDays <= 21 ? `fresh · ${ageLabel(s.ageDays)}` : ageLabel(s.ageDays));
+    bits.push(s.soft ? "soft — review before acting" : "direct evidence");
+    return bits.join(" · ");
+  }
+  function meetsConf(s: InboxSignal): boolean {
+    return inboxMinConf === "all" ? true : inboxMinConf === "medium" ? s.confidence >= CONF_MED : s.confidence >= CONF_HIGH;
+  }
+  // Family → outcome group: a friendly, outcome-oriented label + a kind (which drives
+  // colour) + a display order (opportunities that win work first, then risks, then
+  // positioning). The family taxonomy is the real one — this only relabels it.
+  function groupMeta(family: string): { label: string; kind: "opp" | "risk" | "deliv"; order: number } {
+    const m: Record<string, { label: string; kind: "opp" | "risk" | "deliv"; order: number }> = {
+      buying: { label: "Buying signal", kind: "opp", order: 1 },
+      "new-service-line": { label: "Expand the offer", kind: "opp", order: 2 },
+      competitive: { label: "Competitive", kind: "deliv", order: 3 },
+      objection: { label: "Objection / positioning", kind: "deliv", order: 4 },
+      churn: { label: "Retention risk", kind: "risk", order: 5 },
+      "early-warning": { label: "Early warning", kind: "risk", order: 6 },
+      "delivery-health": { label: "Delivery health", kind: "risk", order: 7 },
+      "risk-playbook": { label: "Risk playbook", kind: "risk", order: 8 },
+    };
+    return m[family] ?? { label: family, kind: "deliv", order: 9 };
   }
 
   // If a user without firm access ends up on the firm-wide lens (e.g. after
@@ -842,7 +1028,7 @@ export default function Home() {
       const d = await fetch("/api/space/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spaceId, query: spaceQuery, audience: spaceAudience, user }),
+        body: JSON.stringify({ spaceId, query: spaceQuery, audience: spaceAudience, user, webSearch }),
       }).then((r) => r.json());
       setSpaceAnswer(d?.error ? { answer: `🔒 ${d.error}`, projectsUsed: [] } : d);
     } catch {
@@ -864,7 +1050,7 @@ export default function Home() {
       const d = await fetch("/api/space/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spaceId: firmId, query: inboxQuery, audience: spaceAudience, user }),
+        body: JSON.stringify({ spaceId: firmId, query: inboxQuery, audience: spaceAudience, user, webSearch }),
       }).then((r) => r.json());
       setInboxAnswer(d?.error ? { answer: `🔒 ${d.error}`, projectsUsed: [] } : d);
     } catch {
@@ -1672,7 +1858,24 @@ export default function Home() {
             </div>
           </div>
 
-          {myProjects.length > 0 && (
+          <div className="home-tabs">
+            <button
+              className={`home-tab ${homeTab === "projects" ? "active" : ""}`}
+              onClick={() => setHomeTab("projects")}
+            >
+              📁 Projects
+            </button>
+            <button
+              className={`home-tab ${homeTab === "interrogate" ? "active" : ""}`}
+              onClick={() => setHomeTab("interrogate")}
+            >
+              🔍 Interrogate
+            </button>
+          </div>
+
+          {/* ---- Projects tab: your engagements (delivery altitude) ---- */}
+          {homeTab === "projects" && (
+            myProjects.length > 0 ? (
             <section className="home-section">
               <div className="home-section-head">
                 <h3>Your engagements</h3>
@@ -1713,140 +1916,155 @@ export default function Home() {
                 </>
               )}
             </section>
+            ) : (
+              <section className="home-section">
+                <div className="empty">No engagements assigned to you yet.</div>
+              </section>
+            )
           )}
 
-          {(inboxLoading || inboxSignals !== null) && (
-            <section className="home-section home-briefing">
-              <div className="home-section-head">
-                <h3>🔔 Signal inbox</h3>
-                <span className="home-role">prioritized from transcripts, risk registers &amp; offer gaps — freshest &amp; most urgent first</span>
-              </div>
-              {readySectors && readySectors.some((s) => s.ready) && (
-                <div className="ready-row">
-                  {readySectors.filter((s) => s.ready).map((s) => (
-                    <button key={s.sector} className="ready-card" onClick={() => openSectorLens(s.sector)} title="open this sector lens">
-                      <span className="ready-sector">🟢 {s.sector.replace(/-/g, " ")}</span>
-                      <span className="ready-meta">{s.clients} clients · {s.cards} engagements · ready to pitch</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-              {/* Ask across EVERY engagement without clicking into a sector first. */}
-              <div className="inbox-ask">
-                <textarea
-                  value={inboxQuery}
-                  onChange={(e) => setInboxQuery(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runInboxQuery(); } }}
-                  placeholder="Ask across every engagement… e.g. 'Where are we most exposed on delivery right now?'"
-                  rows={2}
-                />
-                <button onClick={runInboxQuery} disabled={inboxQueryLoading || !inboxQuery.trim()}>
-                  {inboxQueryLoading ? "Synthesising…" : "Ask across everything"}
+          {/* ---- Interrogate tab: cross-engagement querying, signals & lenses.
+               The sales / marketing / delivery / BD surface — ask across every
+               engagement, optionally blending external web search with firm data. ---- */}
+          {homeTab === "interrogate" && (<>
+
+          {/* ---- Ask (pull): one question across all our work, or one client ---- */}
+          <section className="home-section iq-ask-section">
+            <div className="home-section-head">
+              <h3>Ask across our work</h3>
+              <span className="home-role">answered from the firm's engagements — with provenance</span>
+            </div>
+            <div className="iq-ask">
+              <textarea
+                value={inboxQuery}
+                onChange={(e) => setInboxQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runInboxQuery(); } }}
+                placeholder="e.g. Where's our strongest case for follow-on work right now?"
+                rows={2}
+              />
+              <div className="iq-ask-foot">
+                <label className="websearch-toggle" title="Bring in fresh external stories & reports from the web, synthesised with our data. External material is labelled 🌐 and never saved to the corpus.">
+                  <input type="checkbox" checked={webSearch} onChange={(e) => setWebSearch(e.target.checked)} />
+                  🌐 Blend in web {webSearch ? "· on" : "· off"}
+                </label>
+                <button className="iq-ask-btn" onClick={runInboxQuery} disabled={inboxQueryLoading || !inboxQuery.trim()}>
+                  {inboxQueryLoading ? "Synthesising…" : "Ask"}
                 </button>
               </div>
-              {inboxQueryLoading && <div className="hint">coarse → fine → extract per engagement → synthesise…</div>}
-              {inboxAnswer && (
-                <div className="space-answer">
-                  <div className="markdown">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{inboxAnswer.answer}</ReactMarkdown>
+            </div>
+            {inboxQueryLoading && <div className="iq-process">searched engagements → drilled the relevant ones → extracted evidence → synthesised…</div>}
+            {inboxAnswer && (
+              <div className="iq-answer">
+                <div className="markdown">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{inboxAnswer.answer}</ReactMarkdown>
+                </div>
+                {inboxAnswer.projectsUsed.length > 0 && (
+                  <div className="iq-provenance">
+                    <span className="iq-prov-label">Grounded in {inboxAnswer.projectsUsed.length} engagement{inboxAnswer.projectsUsed.length === 1 ? "" : "s"}</span>
+                    {inboxAnswer.projectsUsed.map((p) => (
+                      <span key={p.project} className="iq-prov-chip" title={`${p.client} · ${p.sector}`}>
+                        {p.title}{p.client !== "(withheld)" ? ` · ${p.client}` : ""}
+                      </span>
+                    ))}
                   </div>
-                  {inboxAnswer.projectsUsed.length > 0 && (
-                    <div className="space-provenance">
-                      <span className="space-prov-label">Drawn from {inboxAnswer.projectsUsed.length} engagements:</span>
-                      {inboxAnswer.projectsUsed.map((p) => (
-                        <span key={p.project} className="space-prov-chip" title={`${p.client} · ${p.sector}`}>
-                          {p.title}{p.client !== "(withheld)" ? ` · ${p.client}` : ""}
-                        </span>
+                )}
+              </div>
+            )}
+          </section>
+
+          {/* ---- Surfaced for you (push): shared, uncapped, confidence-gated ---- */}
+          {(inboxLoading || inboxSignals !== null) && (() => {
+            const afterDismiss = (inboxSignals ?? []).filter((s) => !dismissed[s.id]);
+            const sectorOpts = Array.from(new Set(afterDismiss.flatMap((s) => [s.sector, ...(s.support?.sectors ?? [])]).filter(Boolean) as string[])).sort();
+            const clientOpts = Array.from(new Set(afterDismiss.flatMap((s) => [s.client, ...(s.support?.clients ?? [])]).filter(Boolean) as string[])).sort();
+            const matchesSector = (s: InboxSignal) => inboxSector === "all" || s.sector === inboxSector || (s.support?.sectors ?? []).includes(inboxSector);
+            const matchesClient = (s: InboxSignal) => inboxClient === "all" || s.client === inboxClient || (s.support?.clients ?? []).includes(inboxClient);
+            const scoped = afterDismiss.filter((s) => matchesSector(s) && matchesClient(s));
+            const shown = scoped.filter(meetsConf);
+            const below = scoped.length - shown.length;
+            const barLabel = inboxMinConf === "high" ? "High" : inboxMinConf === "medium" ? "Medium" : "any";
+            // Group by family → outcome, ordered opportunities-first. Uncapped: if lots
+            // clear the bar, show them all — the confidence filter is the throttle.
+            const families = Array.from(new Set(shown.map((s) => s.family)));
+            families.sort((a, b) => groupMeta(a).order - groupMeta(b).order);
+            const confChoices: { key: "high" | "medium" | "all"; label: string }[] = [
+              { key: "high", label: "High" }, { key: "medium", label: "Medium" }, { key: "all", label: "All" },
+            ];
+            return (
+              <section className="home-section iq-surfaced">
+                <div className="surf-head">
+                  <h3>⭐ Surfaced for you {!inboxLoading && <span className="count">{shown.length} clear your {barLabel} bar</span>}</h3>
+                  <div className="surf-controls">
+                    <div className="conf-filter" title="Default is High so what surfaces is trustworthy; lower it to hunt earlier, rougher leads.">
+                      <span className="cf-label">confidence</span>
+                      {confChoices.map((c) => (
+                        <button key={c.key} className={`cf-opt ${inboxMinConf === c.key ? "active" : ""}`} onClick={() => setInboxMinConf(c.key)}>{c.label}</button>
                       ))}
                     </div>
-                  )}
-                </div>
-              )}
-              <div className="briefing-signals">
-                {inboxLoading && <div className="hint">scanning transcripts, risk registers &amp; offer gaps for signals…</div>}
-                {memNote && <div className="hint briefing-note">{memNote}</div>}
-                {!inboxLoading && inboxSignals && (() => {
-                  // Feed → tabs (All / Risks / Opportunities / FYI) + sector & client
-                  // filters, so you can browse everything in one place. Signals arrive
-                  // score-sorted from the server; we keep that order within each view.
-                  const all = inboxSignals.filter((s) => !dismissed[s.id]);
-                  const sectorOpts = Array.from(new Set(
-                    all.flatMap((s) => [s.sector, ...(s.support?.sectors ?? [])]).filter(Boolean) as string[]
-                  )).sort();
-                  const clientOpts = Array.from(new Set(
-                    all.flatMap((s) => [s.client, ...(s.support?.clients ?? [])]).filter(Boolean) as string[]
-                  )).sort();
-                  const matchesSector = (s: InboxSignal) =>
-                    inboxSector === "all" || s.sector === inboxSector || (s.support?.sectors ?? []).includes(inboxSector);
-                  const matchesClient = (s: InboxSignal) =>
-                    inboxClient === "all" || s.client === inboxClient || (s.support?.clients ?? []).includes(inboxClient);
-                  const open = all.filter((s) => matchesSector(s) && matchesClient(s));
-                  const tabs: { key: "all" | "risk" | "opp" | "fyi"; label: string }[] = [
-                    { key: "all", label: "All" },
-                    { key: "risk", label: "⚠ Risks" },
-                    { key: "opp", label: "✨ Opportunities" },
-                    { key: "fyi", label: "FYI" },
-                  ];
-                  const buckets: { key: "risk" | "opp" | "fyi"; label: string; hint: string }[] = [
-                    { key: "risk", label: "⚠ Risks to act on", hint: "delivery, retention & early-warning" },
-                    { key: "opp", label: "✨ Opportunities", hint: "buying, competitive & new service lines" },
-                    { key: "fyi", label: "FYI / needs review", hint: "lower-confidence intel & reference" },
-                  ];
-                  return (
-                    <>
-                      <div className="inbox-controls">
-                        <div className="inbox-tabs">
-                          {tabs.map((t) => (
-                            <button key={t.key} className={`inbox-tab ${inboxTab === t.key ? "active" : ""}`} onClick={() => setInboxTab(t.key)}>{t.label}</button>
-                          ))}
-                        </div>
-                        <div className="inbox-filters">
-                          <select value={inboxSector} onChange={(e) => setInboxSector(e.target.value)}>
-                            <option value="all">All sectors</option>
-                            {sectorOpts.map((o) => <option key={o} value={o}>{o.replace(/-/g, " ")}</option>)}
-                          </select>
-                          <select value={inboxClient} onChange={(e) => setInboxClient(e.target.value)}>
-                            <option value="all">All clients</option>
-                            {clientOpts.map((o) => <option key={o} value={o}>{o}</option>)}
-                          </select>
-                        </div>
+                    {(sectorOpts.length > 0 || clientOpts.length > 0) && (
+                      <div className="surf-scope">
+                        <select value={inboxSector} onChange={(e) => setInboxSector(e.target.value)}>
+                          <option value="all">All sectors</option>
+                          {sectorOpts.map((o) => <option key={o} value={o}>{o.replace(/-/g, " ")}</option>)}
+                        </select>
+                        <select value={inboxClient} onChange={(e) => setInboxClient(e.target.value)}>
+                          <option value="all">All clients</option>
+                          {clientOpts.map((o) => <option key={o} value={o}>{o}</option>)}
+                        </select>
                       </div>
-                      {open.length === 0 ? (
-                        <div className="hint">No open signals match — you&apos;re clear.</div>
-                      ) : inboxTab === "all" ? (
-                        buckets.map((b) => {
-                          const items = open.filter((s) => signalBucket(s) === b.key);
-                          if (!items.length) return null;
-                          return (
-                            <div key={b.key} className="signal-bucket">
-                              <div className="signal-bucket-head">
-                                {b.label} <span className="signal-bucket-hint">{b.hint}</span>
-                              </div>
-                              {items.map(renderSignalCard)}
-                            </div>
-                          );
-                        })
-                      ) : (
-                        (() => {
-                          const items = open.filter((s) => signalBucket(s) === inboxTab);
-                          return items.length
-                            ? items.map(renderSignalCard)
-                            : <div className="hint">Nothing in this view right now.</div>;
-                        })()
-                      )}
-                    </>
-                  );
-                })()}
-              </div>
-            </section>
-          )}
+                    )}
+                  </div>
+                </div>
 
+                {readySectors && readySectors.some((s) => s.ready) && (
+                  <div className="ready-row">
+                    {readySectors.filter((s) => s.ready).map((s) => (
+                      <button key={s.sector} className="ready-card" onClick={() => openSectorLens(s.sector)} title="open this sector lens">
+                        <span className="ready-sector">🟢 {s.sector.replace(/-/g, " ")}</span>
+                        <span className="ready-meta">{s.clients} clients · {s.cards} engagements · ready to pitch</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {inboxLoading && <div className="iq-process">scanning transcripts, risk registers &amp; offer gaps for signals…</div>}
+                {memNote && <div className="hint briefing-note">{memNote}</div>}
+
+                {!inboxLoading && shown.length === 0 && (
+                  <div className="iq-empty">Nothing clears the {barLabel} bar right now{below > 0 ? <> — <button className="link-btn" onClick={() => setInboxMinConf(inboxMinConf === "high" ? "medium" : "all")}>lower the bar</button> to see {below} more.</> : "."}</div>
+                )}
+
+                {!inboxLoading && families.map((fam) => {
+                  const gm = groupMeta(fam);
+                  const items = shown.filter((s) => s.family === fam);
+                  return (
+                    <div key={fam} className="iq-group">
+                      <div className="iq-group-head">
+                        <span className={`kind-pill kind-${gm.kind}`}>{gm.label}</span>
+                        <span className="iq-group-count">{items.length}</span>
+                      </div>
+                      <div className="iq-feed">{items.map(renderInsightCard)}</div>
+                    </div>
+                  );
+                })}
+
+                {!inboxLoading && shown.length > 0 && below > 0 && (
+                  <div className="iq-threshold">
+                    Showing all {shown.length} at {barLabel} confidence. {below} more sit below the bar —{" "}
+                    <button className="link-btn" onClick={() => setInboxMinConf(inboxMinConf === "high" ? "medium" : "all")}>lower to {inboxMinConf === "high" ? "Medium" : "All"}</button> to hunt earlier leads.
+                  </div>
+                )}
+              </section>
+            );
+          })()}
+
+          {/* ---- Lenses: drill into an account / sector / the firm ---- */}
           <section className="home-section">
             <div className="home-section-head">
-              <h3>{isDeliveryRoleClient(user) ? "Across your work" : "Your workspace — across engagements"}</h3>
+              <h3>{isDeliveryRoleClient(user) ? "Across your work" : "Cross-engagement lenses"}</h3>
             </div>
             <p className="home-hint">
-              Query, spot opportunities, and triangulate signals across many engagements. Answers are de-identified where client data is combined.
+              Query, spot opportunities, and triangulate signals within one account, sector, or the whole firm. Answers are de-identified where client data is combined.
             </p>
             <div className="lens-grid">
               {visibleLenses.map((s) => (
@@ -1858,6 +2076,8 @@ export default function Home() {
               ))}
             </div>
           </section>
+
+          </>)}
         </div>
       )}
 
@@ -1920,62 +2140,10 @@ export default function Home() {
           <div className="panel-header">
             {activeChat ? (chats.find((c) => c.chatId === activeChat)?.title || "New chat") : "Chat"}
             {openFile && <span className="badge">this → {openFile.split("/").pop()}</span>}
-            {activeChat && agents.length > 0 && (
-              <span className="agent-pick" title="which agent answers in this chat">
-                🤖
-                <select
-                  value={chats.find((c) => c.chatId === activeChat)?.agentId ?? defaultAgentId}
-                  onChange={(e) => setChatAgent(e.target.value)}
-                >
-                  {agents.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
-                </select>
-              </span>
-            )}
+            {/* The system auto-orchestrates: every chat runs the lead (deep) agent,
+                which plans and delegates to specialists on its own — no agent to pick. */}
           </div>
           <div className="chat">
-            {/* Objectives strip: the signed-off north star, always visible above the
-                constraints. Click to open objectives.md. */}
-            {objectives && objectives.length > 0 && (
-              <button
-                className="objectives-strip"
-                title={`Open the engagement objectives\n\n• ${objectives.join("\n• ")}`}
-                onClick={() => openFileFn("objectives.md")}
-              >
-                <span className="obj-tag">🎯 Objectives</span>
-                {objectives.map((o, i) => (
-                  <span key={i} className="obj-item">{o.length > 52 ? o.slice(0, 52) + "…" : o}</span>
-                ))}
-              </button>
-            )}
-            {/* Engagement strip: the standing constraints frame, always visible.
-                Click to open engagement.md and edit the underlying constraints. */}
-            {engagement && (
-              <button
-                className="engagement-strip"
-                title="Open the engagement brief (SOW, budget, timeline, scope, risks)"
-                onClick={() => openFileFn("engagement.md")}
-              >
-                <span className="eng-tag">📋 Engagement</span>
-                {engagement.phase && <span className="eng-item">{engagement.phase}</span>}
-                {engagement.budgetLabel && (
-                  <span className={`eng-item${(engagement.budgetPct ?? 0) >= 80 ? " eng-warn" : ""}`}>{engagement.budgetLabel}</span>
-                )}
-                {engagement.nextMilestone && (
-                  <span className={`eng-item${engagement.nextMilestone.atRisk ? " eng-risk" : ""}`}>
-                    {engagement.nextMilestone.atRisk ? "⚠ " : "→ "}
-                    {engagement.nextMilestone.name}
-                    {engagement.nextMilestone.due ? ` (${engagement.nextMilestone.due})` : ""}
-                  </span>
-                )}
-                {engagement.topRisk && (
-                  <span className="eng-item eng-risk" title={engagement.topRisk.text}>
-                    ⚠ {engagement.topRisk.text.length > 46 ? engagement.topRisk.text.slice(0, 46) + "…" : engagement.topRisk.text}
-                  </span>
-                )}
-              </button>
-            )}
             <div className="messages">
               {/* Warm start: on a cold project, proactively show what we already know
                   + starter questions + an optional 3-question kickoff interview. */}
@@ -2405,7 +2573,8 @@ export default function Home() {
               <div className="empty">
                 An agent is a <b>system prompt + model + tools</b>. Memory (the scope lattice) and your working
                 context are wired into every agent the same way; the loop is always think → call tools → answer.
-                Pick a chat’s agent from the 🤖 menu in the chat header.
+                The system auto-orchestrates: every chat runs the lead (deep) agent, which plans the work and
+                delegates to the specialists below — you don’t pick an agent per chat.
               </div>
               <div className="agents-layout">
                 <div className="agents-list">

@@ -27,7 +27,10 @@ export type Agent = {
   tools: string[]; // tool names this agent may call ([] or missing = all tools)
 };
 
-export const DEFAULT_AGENT_ID = "consulting-teammate";
+// The default agent every chat runs unless one is explicitly assigned. It is the
+// LEAD (deep) agent so the system auto-orchestrates — plans the work and delegates
+// to specialists — rather than making the user pick an agent per chat.
+export const DEFAULT_AGENT_ID = "lead-consultant";
 const ALL_TOOLS = TOOLS.map((t) => t.name);
 // The deep-agent harness tools (plan + delegate) — granted only to the lead agent.
 const DEEP_TOOL_NAMES = DEEP_TOOLS.map((t) => t.name);
@@ -145,7 +148,7 @@ export async function getAgent(id: string | null | undefined): Promise<Agent> {
     return JSON.parse(await fs.readFile(agentPath(wanted), "utf8")) as Agent;
   } catch {
     // Unknown/removed agent → fall back to the default so a chat never breaks.
-    return SEED[0];
+    return SEED.find((a) => a.id === DEFAULT_AGENT_ID) ?? SEED[0];
   }
 }
 

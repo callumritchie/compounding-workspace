@@ -43,6 +43,22 @@ inspectable in the glass box.
 - Upload PDFs/text → extracted, chunked, embedded.
 - **⚖ Compare retrieval**: one question, three ways — naïve-vector vs reranked-vector vs agentic — side by side.
 
+## Cross-engagement intelligence (the 🔍 Interrogate tab)
+
+Where memory + RAG compound across *every* engagement — the surface for winning more work and running it better:
+
+- **Ask** — one question across all the firm's work (or one client), answered with **provenance** by a
+  coarse → fine → extract → synthesise pipeline. **🌐 Blend in web** pulls fresh external context (client news,
+  sector trends), labelled and kept separate from the firm's own evidence.
+- **Surfaced for you** — a shared, proactive feed of buying signals, follow-on openings, delivery risks and
+  positioning angles, mined from transcripts, risk registers and offer gaps. Grouped by outcome, **uncapped**,
+  with a **confidence bar** (defaults to High) as the throttle.
+- **Evidence-first, auditable confidence** — each insight shows *why* it's rated (graded drivers: signal
+  strength, corroboration, freshness, verbatim evidence, breadth), the verbatim evidence trail, and a
+  **counter-check** ("stress-tested against… what would change its mind") — computed from real fields, not invented.
+- **Shared team notes** — anyone can leave a natural-language **correction / context / nullify** on a surfaced
+  insight; it's persisted and visible to the whole team (a nullify retires it for everyone).
+
 Plus: **live streaming** — watch the agent read files, search, and write its answer in real time — and a
 per-message **▸ x-ray** (click any answer to see the tools, retrieved passages, and memories that produced it).
 **Multi-chat tabs** for concurrent tasks (memory + files shared across tabs; each tab is aware of what your
@@ -55,6 +71,7 @@ memory), working context ("summarise **this**"), and an **eval harness** that ga
 - ⚖ Compare retrieval: *"why do remote care programs fail to scale?"* → naïve vs reranked vs agentic over the market report.
 - Open a **＋ new tab**, start a different task, then ask a tab *"what am I working on in my other tab?"*
 - Nominate a lesson → ⬆ Promotions → promote → switch to Bob + `beacon-health` → it's there.
+- Open **🔍 Interrogate** → expand a surfaced insight to see its evidence + counter-check → leave a shared **correction** and watch it appear for the whole team.
 
 ## Scripts
 | Command | What |
@@ -66,10 +83,12 @@ memory), working context ("summarise **this**"), and an **eval harness** that ga
 ## Where things live
 | Path | What |
 |---|---|
-| `app/page.tsx` | The whole UI |
-| `app/api/*` | Endpoints (chat, files, promotions, compare, upload, feedback, signals) |
+| `app/page.tsx` | The whole UI (Projects + Interrogate) |
+| `app/api/*` | Endpoints (chat, files, promotions, compare, upload, signals, annotate, space query) |
 | `lib/agent.ts` | The Claude calls (agent loop, reranker, abstraction) |
 | `lib/memory.ts` `lib/assemble.ts` | Memory store + context assembly |
-| `lib/promotion.ts` `lib/signals.ts` | The compounding engine |
+| `lib/promotion.ts` `lib/signals/*` | The compounding + signal engine (inbox, assess, annotations) |
+| `lib/retrieval.ts` | Cross-project retrieval + synthesis (the Interrogate answer pipeline) |
 | `lib/vectors.ts` `lib/embed.ts` `lib/chunk.ts` | The RAG arm |
+| `DESIGN.md` | The shared design system + ship checklist |
 | `workspace/` | All state, as plain files you can open |

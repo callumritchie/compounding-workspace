@@ -211,6 +211,22 @@ CREATE VIRTUAL TABLE IF NOT EXISTS signal_atoms_vec USING vec0(
   sector    TEXT,
   embedding float[${MEM_DIM}] distance_metric=cosine
 );
+
+-- Human notes on surfaced insights (the Interrogate "correct / sharpen / nullify"
+-- layer). Keyed by the SIGNAL's stable id (e.g. 'churn:beta') so a note survives the
+-- inbox being recomputed each load. SHARED: every user sees every active note, and a
+-- 'nullify' retires the insight for the whole team (with author + reason kept for
+-- audit). This is the collaborative editing surface — one team, one shared read.
+CREATE TABLE IF NOT EXISTS signal_annotations (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  signal_id TEXT NOT NULL,                          -- stable inbox signal id
+  author    TEXT NOT NULL,
+  kind      TEXT NOT NULL DEFAULT 'context',        -- context | correction | nullify
+  body      TEXT NOT NULL,                          -- the natural-language note
+  ts        TEXT NOT NULL,
+  status    TEXT NOT NULL DEFAULT 'active'          -- active | withdrawn
+);
+CREATE INDEX IF NOT EXISTS idx_annotations_signal ON signal_annotations(signal_id);
 `;
 
 // sqlite-vec takes an embedding as a JSON array string.

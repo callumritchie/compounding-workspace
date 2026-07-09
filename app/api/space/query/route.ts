@@ -9,7 +9,7 @@ import { canAccessSpace, spaceAccessBlockReason } from "@/lib/team";
 import { getDb, audit } from "@/lib/db";
 
 export async function POST(req: Request) {
-  const { spaceId, query, audience, user } = await req.json().catch(() => ({}));
+  const { spaceId, query, audience, user, webSearch } = await req.json().catch(() => ({}));
   if (typeof spaceId !== "string" || typeof query !== "string" || !query.trim()) {
     return Response.json({ error: "missing spaceId/query" }, { status: 400 });
   }
@@ -30,7 +30,7 @@ export async function POST(req: Request) {
   const result = await answerAcross(
     query,
     { projectIds },
-    { abstract, audience: typeof audience === "string" ? audience : undefined }
+    { abstract, audience: typeof audience === "string" ? audience : undefined, webSearch: webSearch === true }
   );
 
   // H3: cross-client confidentiality audit — who asked what of which clients' data,
