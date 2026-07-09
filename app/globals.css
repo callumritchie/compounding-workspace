@@ -183,6 +183,17 @@ html, body {
 .live { display: flex; flex-direction: column; gap: 4px; }
 .live-think { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.4; }
 .live-step { font-size: 12px; line-height: 1.5; }
+.live-sub { margin-left: 16px; color: var(--muted); }
+
+/* Deep-agent plan checklist (the adaptive to-do list) */
+.live-plan { display: flex; flex-direction: column; gap: 3px; margin: 2px 0 6px; padding: 8px 10px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--panel); }
+.live-plan-h { font-size: 11px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
+.plan-item { font-size: 12px; line-height: 1.5; display: flex; gap: 8px; align-items: baseline; }
+.plan-check { display: inline-block; width: 12px; text-align: center; color: var(--muted); flex: none; }
+.plan-done { color: var(--muted); }
+.plan-done span:last-child { text-decoration: line-through; }
+.plan-in_progress { font-weight: 600; }
+.plan-in_progress .plan-check { color: var(--accent); }
 
 /* Per-message X-ray */
 .xray-wrap { margin-top: 4px; }
@@ -272,6 +283,22 @@ html, body {
 .briefing-note { color: #2e7d32; }
 .theme-card.mine { border-left: 3px solid var(--accent, #6b7cff); }
 .for-you { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; color: var(--accent, #6b7cff); border: 1px solid currentColor; border-radius: 4px; padding: 1px 5px; }
+/* ---- Signal inbox cards ---- */
+.signal-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--panel, rgba(0,0,0,0.02)); }
+.signal-card.mine { border-left: 3px solid var(--accent, #6b7cff); }
+.signal-card.alert { border-left: 3px solid #d9534f; }
+.signal-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 5px; }
+.sig-family { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; }
+.fam-churn, .fam-early-warning, .fam-delivery-health { color: #d9534f; }
+.fam-buying, .fam-new-service-line { color: #2e7d32; }
+.fam-competitive { color: #b8860b; }
+.fam-risk-playbook { color: #5aa0e0; }
+.sig-soft { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #b8860b; border: 1px solid currentColor; border-radius: 4px; padding: 1px 5px; }
+.sig-meta { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.signal-title { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+.signal-detail { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.signal-evidence { font-size: 12px; font-style: italic; border-left: 2px solid var(--border); padding-left: 8px; margin-bottom: 8px; color: var(--fg); opacity: .85; }
+.signal-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .theme-actions { display: flex; gap: 6px; }
 .mini.primary { background: var(--accent, #6b7cff); color: #fff; border-color: transparent; }
 .signal-draft { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 10px; }

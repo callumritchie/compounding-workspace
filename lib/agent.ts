@@ -18,7 +18,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { createHash } from "crypto";
 import type { Message } from "./workspace";
-import { TOOLS, executeTool, type TraceEntry } from "./tools";
+import { TOOLS, DEEP_TOOLS, executeTool, type TraceEntry } from "./tools";
 import { getMemoriesForContext } from "./memory";
 import { readFile, listFiles } from "./corpus";
 import { getProjectConfig } from "./project";
@@ -68,11 +68,17 @@ to make the advice land in reality. Be concise, direct, and practical.`;
 const client = new Anthropic();
 
 // Streaming events emitted as the agent works (for the live view).
+export type PlanStep = { step: string; status: "pending" | "in_progress" | "done" };
 export type AgentEvent =
   | { type: "step"; n: number }
   | { type: "thinking"; text: string }
   | { type: "text"; text: string }
-  | { type: "tool"; name: string; input: Record<string, unknown>; summary: string };
+  | { type: "tool"; name: string; input: Record<string, unknown>; summary: string }
+  // Deep-agent events: the plan the agent is working to, and the sub-agents it
+  // delegates to (with their own tool calls surfaced as nested steps).
+  | { type: "plan"; todos: PlanStep[] }
+  | { type: "delegate"; phase: "start" | "end"; agent: string; task?: string; summary?: string }
+  | { type: "subtool"; agent: string; name: string; summary: string };
 
 // What the agent returns: the final answer, a trace of the tools it used, token
 // usage (summed across every model call in the turn), and the reasoning summary.
@@ -82,6 +88,9 @@ export type AgentResult = { text: string; trace: TraceEntry[]; usage: Usage; rea
 // The agent loop. Streams as it goes: pass `onEvent` to receive thinking / tool /
 // text events live; omit it to just run to completion (used by the eval + compare).
 export type AgentSpec = { systemPrompt: string; model: string; toolNames?: string[] };
+// A specialist the lead agent may delegate to. Resolved from the roster by the
+// caller (the chat route) and passed in, so agent.ts needn't import agents.ts.
+export type SubagentSpec = { id: string; name: string; systemPrompt: string; model: string; toolNames?: string[] };
 
 export async function runAgent(
   messages: Message[],
@@ -91,6 +100,7 @@ export async function runAgent(
     stableBlock?: string;
     volatileBlock?: string;
     agent?: AgentSpec; // which agent (persona/model/tools); omitted → the default
+    subagents?: SubagentSpec[]; // specialists the agent may `delegate` to (deep agents only)
   },
   onEvent?: (ev: AgentEvent) => void
 ): Promise<AgentResult> {
@@ -98,9 +108,13 @@ export async function runAgent(
   // it may call. Omitting `agent` (eval + compare) keeps the shipped defaults.
   const persona = opts.agent?.systemPrompt ?? SYSTEM_BASE;
   const model = opts.agent?.model || MODEL;
+  // The deep-agent tools (update_plan/delegate) are only offered to an agent that
+  // explicitly lists them. The default/eval path (no agent spec) gets exactly the
+  // original TOOLS, so it stays byte-identical and the golden-set gate is unaffected.
+  const catalogue = opts.agent ? [...TOOLS, ...DEEP_TOOLS] : TOOLS;
   const tools =
     opts.agent?.toolNames && opts.agent.toolNames.length
-      ? TOOLS.filter((t) => opts.agent!.toolNames!.includes(t.name))
+      ? catalogue.filter((t) => opts.agent!.toolNames!.includes(t.name))
       : TOOLS;
 
   // Order the prompt stable → volatile. The stable block (persona + constitution
@@ -194,6 +208,86 @@ export async function runAgent(
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
     for (const tu of toolUses) {
       const input = (tu.input ?? {}) as Record<string, unknown>;
+
+      // --- Deep-agent built-ins (handled here, not in executeTool) ---
+
+      // update_plan — the agent's visible, adaptive checklist. We just surface it
+      // and ack; the plan lives in the trace so the x-ray shows the final state.
+      if (tu.name === "update_plan") {
+        const todos: PlanStep[] = Array.isArray(input.todos)
+          ? (input.todos as unknown[])
+              .map((t) => {
+                const o = (t ?? {}) as { step?: unknown; status?: unknown };
+                const status = o.status === "done" ? "done" : o.status === "in_progress" ? "in_progress" : "pending";
+                return { step: String(o.step ?? "").trim(), status } as PlanStep;
+              })
+              .filter((t) => t.step)
+          : [];
+        onEvent?.({ type: "plan", todos });
+        const doneN = todos.filter((t) => t.status === "done").length;
+        trace.push({
+          tool: "update_plan",
+          input,
+          summary: `plan · ${todos.length} step${todos.length === 1 ? "" : "s"}${doneN ? ` · ${doneN} done` : ""}`,
+          result: todos.map((t) => `${t.status === "done" ? "✓" : t.status === "in_progress" ? "▸" : "○"} ${t.step}`).join("\n"),
+        });
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: tu.id,
+          content: "Plan updated. Keep going — call update_plan again to mark steps done or revise the plan.",
+        });
+        continue;
+      }
+
+      // delegate — run a roster specialist in its OWN isolated context (a fresh
+      // conversation with just the task; no access to this chat's history). It
+      // gets the same project grounding, its own persona + tools, and cannot
+      // itself plan/delegate (deep tools stripped → exactly one level deep).
+      if (tu.name === "delegate") {
+        const agentId = String(input.agent ?? "").trim();
+        const task = String(input.task ?? "").trim();
+        const sub = opts.subagents?.find((s) => s.id === agentId);
+        if (!sub) {
+          const known = (opts.subagents ?? []).map((s) => s.id).join(", ") || "none available";
+          const msg = `Unknown specialist "${agentId}". Available: ${known}. Delegate to one of those, or do the work yourself.`;
+          trace.push({ tool: "delegate", input, summary: `delegate failed — unknown "${agentId}"`, result: msg });
+          toolResults.push({ type: "tool_result", tool_use_id: tu.id, content: msg });
+          continue;
+        }
+        onEvent?.({ type: "delegate", phase: "start", agent: sub.name, task });
+        const childTools = (sub.toolNames ?? []).filter((n) => n !== "update_plan" && n !== "delegate");
+        const child = await runAgent(
+          [{ role: "user", content: task }],
+          {
+            projectId: opts.projectId,
+            user: opts.user,
+            stableBlock: opts.stableBlock,
+            volatileBlock: opts.volatileBlock,
+            agent: { systemPrompt: sub.systemPrompt, model: sub.model, toolNames: childTools },
+            // no `subagents` → the specialist can't delegate further (one level deep)
+          },
+          // Surface the specialist's tool calls as nested steps; suppress its token
+          // stream so the parent live view stays legible — its answer returns below.
+          (cev) => {
+            if (cev.type === "tool") onEvent?.({ type: "subtool", agent: sub.name, name: cev.name, summary: cev.summary });
+          }
+        );
+        usage.input += child.usage.input;
+        usage.output += child.usage.output;
+        usage.cacheRead += child.usage.cacheRead;
+        usage.cacheWrite += child.usage.cacheWrite;
+        onEvent?.({ type: "delegate", phase: "end", agent: sub.name, summary: child.text.slice(0, 160) });
+        trace.push({
+          tool: "delegate",
+          input,
+          summary: `delegated to ${sub.name} → ${child.trace.length} tool call${child.trace.length === 1 ? "" : "s"}`,
+          result: child.text.slice(0, 900),
+        });
+        toolResults.push({ type: "tool_result", tool_use_id: tu.id, content: `${sub.name} reports:\n\n${child.text}` });
+        continue;
+      }
+
+      // --- Regular corpus/memory tools ---
       const { result, summary } = await executeTool(
         { projectId: opts.projectId, user: opts.user },
         tu.name,

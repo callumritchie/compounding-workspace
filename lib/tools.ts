@@ -126,6 +126,57 @@ export const TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// DEEP_TOOLS — the "deep agent" harness tools, deliberately kept OUT of TOOLS.
+//
+// These two are what makes a deepagents-style deep agent FEEL different from a
+// reactive tool-caller: it PLANS first (update_plan) and DELEGATES specialist
+// work to sub-agents running in their own isolated context (delegate). They are
+// handled inside the agent loop (lib/agent.ts), not by executeTool — delegate
+// needs to run a nested agent, which would create an import cycle here.
+//
+// Kept separate so the default agent (and therefore the eval, which runs with no
+// agent spec) never sees them: only an agent whose roster entry lists these tool
+// names gets them. See runAgent's catalogue assembly.
+export const DEEP_TOOLS: Anthropic.Tool[] = [
+  {
+    name: "update_plan",
+    description:
+      "Lay out or revise your PLAN for this task as a short checklist. Call this FIRST for any multi-step request, then call it again as you go to mark steps in_progress/done or add/revise steps. Pass the WHOLE current plan each time (it replaces the previous one). Keeps your work legible to the user.",
+    input_schema: {
+      type: "object",
+      properties: {
+        todos: {
+          type: "array",
+          description: "The full, ordered plan. 2-6 concise steps.",
+          items: {
+            type: "object",
+            properties: {
+              step: { type: "string", description: "One short step, imperative (e.g. 'Review the CFO interview for red flags')" },
+              status: { type: "string", enum: ["pending", "in_progress", "done"], description: "Where this step stands right now" },
+            },
+            required: ["step", "status"],
+          },
+        },
+      },
+      required: ["todos"],
+    },
+  },
+  {
+    name: "delegate",
+    description:
+      "Delegate a self-contained piece of work to a specialist teammate who runs in their OWN isolated context (they don't see this conversation — give them everything they need in `task`). Use for work that benefits from a specific lens: a rigorous risk/red-flag review, or a sharp strategy pressure-test. They return their findings; you then synthesise. Available specialists are listed in your instructions.",
+    input_schema: {
+      type: "object",
+      properties: {
+        agent: { type: "string", description: "The specialist's id, exactly as listed in your instructions (e.g. 'diligence-lead')." },
+        task: { type: "string", description: "A complete, standalone brief for the specialist — what to do and any context they need, since they can't see this chat." },
+      },
+      required: ["agent", "task"],
+    },
+  },
+];
+
 // One record of a tool the agent invoked — used to show the "glass box" trace.
 // `result` is a short preview of what the tool returned (e.g. retrieved passages),
 // shown in the per-message X-ray.

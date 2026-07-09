@@ -179,6 +179,38 @@ CREATE TABLE IF NOT EXISTS reuse_events (
 );
 CREATE INDEX IF NOT EXISTS idx_reuse_memory ON reuse_events(memory_id);
 CREATE INDEX IF NOT EXISTS idx_reuse_target ON reuse_events(target_project);
+
+-- Signal ATOMS (the Signal Engine): typed, sourced, timestamped, confidence-graded
+-- observations extracted from interaction transcripts + risk registers. This is the
+-- new signal LAYER that sits between raw corpus and the consumers (cards stay the
+-- coarse RETRIEVAL layer). Aggregation / temporal / whitespace / the inbox all read
+-- atoms. NB: the older 'signals' table above is the unrelated memory usage-tracker.
+CREATE TABLE IF NOT EXISTS signal_atoms (
+  id          TEXT PRIMARY KEY,
+  type        TEXT NOT NULL,                          -- buying | competitive | objection | unmet-need | relationship | delivery-risk | risk-entry
+  text        TEXT NOT NULL,                          -- the atom, one sentence
+  evidence    TEXT,                                   -- VERBATIM quote from the source
+  source      TEXT,                                   -- file path it came from
+  source_kind TEXT,                                   -- client-transcript | internal-transcript | risk-register | doc
+  project     TEXT,
+  client      TEXT,
+  sector      TEXT,
+  scope       TEXT,                                   -- gating scope (internal-derived stays project/<id>)
+  confidence  REAL NOT NULL DEFAULT 0.5,              -- 0..1 — soft-signal grading
+  urgency     REAL NOT NULL DEFAULT 0.5,              -- 0..1 — perishability
+  sentiment   REAL,                                   -- -1..1 for relationship/health atoms (else NULL)
+  ts          TEXT,                                   -- ISO timestamp of the interaction (freshness)
+  week        TEXT,                                   -- risk-register week label (temporal ordering)
+  status      TEXT NOT NULL DEFAULT 'new'             -- new | reviewed | actioned | dismissed
+);
+CREATE INDEX IF NOT EXISTS idx_atoms_project ON signal_atoms(project);
+CREATE INDEX IF NOT EXISTS idx_atoms_type ON signal_atoms(type);
+CREATE VIRTUAL TABLE IF NOT EXISTS signal_atoms_vec USING vec0(
+  id        TEXT PRIMARY KEY,
+  type      TEXT,
+  sector    TEXT,
+  embedding float[${MEM_DIM}] distance_metric=cosine
+);
 `;
 
 // sqlite-vec takes an embedding as a JSON array string.

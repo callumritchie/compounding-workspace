@@ -291,6 +291,25 @@ type EmergentTheme = {
   evidence: string[];
 };
 type SectorDensity = { sector: string; projects: number; clients: number; cards: number; lessons: number; ready: boolean };
+type InboxSignal = {
+  id: string;
+  family: string;
+  route: string;
+  title: string;
+  detail: string;
+  evidence: string[];
+  support?: { clients?: string[]; sectors: string[]; projects?: string[]; count: number };
+  client?: string;
+  sector?: string;
+  confidence: number;
+  urgency: number;
+  ts?: string;
+  ageDays?: number;
+  score: number;
+  soft: boolean;
+  deIdentified: boolean;
+  actions: { draft: boolean; nominate: boolean };
+};
 type ImpactStats = {
   totalReuses: number;
   distinctInsights: number;
@@ -327,6 +346,7 @@ export default function Home() {
   const [liveSteps, setLiveSteps] = useState<string[]>([]); // tool steps as they happen
   const [liveReasoning, setLiveReasoning] = useState(""); // streamed thinking
   const [liveText, setLiveText] = useState(""); // streamed answer so far
+  const [livePlan, setLivePlan] = useState<{ step: string; status: string }[]>([]); // deep-agent plan checklist
   const [xray, setXray] = useState<Record<number, boolean>>({}); // which messages are expanded
 
   const [files, setFiles] = useState<string[]>([]);
@@ -370,8 +390,9 @@ export default function Home() {
   const [themesLoading, setThemesLoading] = useState(false);
   // Proactive Home briefing (firm-authorised roles): emergent signals to route +
   // which sectors are dense enough to pitch. Loaded once per user on landing.
-  const [homeThemes, setHomeThemes] = useState<EmergentTheme[] | null>(null);
-  const [homeThemesLoading, setHomeThemesLoading] = useState(false);
+  const [inboxSignals, setInboxSignals] = useState<InboxSignal[] | null>(null);
+  const [inboxLoading, setInboxLoading] = useState(false);
+  const [dismissed, setDismissed] = useState<Record<string, boolean>>({});
   const [readySectors, setReadySectors] = useState<SectorDensity[] | null>(null);
   const briefingUserRef = useRef<string | null>(null);
   // Drafted artifacts, keyed by the signal's insight text (stable across re-sorts).
@@ -576,21 +597,21 @@ export default function Home() {
   // The route a user personally owns — used to flag "for you" signals on Home.
   const myRoute = CLIENT_ROLES[user] === "sales" ? "sales" : CLIENT_ROLES[user] === "marketing" ? "marketing" : CLIENT_ROLES[user] === "lead" ? "leadership" : "";
 
-  // Proactive Home briefing: for firm-authorised roles, prefetch the emergent
-  // signals (slow, LLM) + sector readiness (fast) once when they land on Home.
+  // Proactive Home briefing: for firm-authorised roles, prefetch the prioritized
+  // signal inbox + sector readiness once when they land on Home.
   useEffect(() => {
     if (view !== "home" || !canAccessFirmClient(user)) return;
     if (briefingUserRef.current === user) return; // already loaded for this persona
     briefingUserRef.current = user;
     setReadySectors(null);
-    setHomeThemes(null);
-    setHomeThemesLoading(true);
+    setInboxSignals(null);
+    setInboxLoading(true);
     fetch(`/api/home/briefing?user=${user}`).then((r) => r.json()).then((d) => setReadySectors(d.sectors ?? [])).catch(() => setReadySectors([]));
-    fetch(`/api/signals/emergent?user=${user}`)
+    fetch(`/api/signals/inbox?user=${user}`)
       .then((r) => r.json())
-      .then((d) => setHomeThemes(d.themes ?? []))
-      .catch(() => setHomeThemes([]))
-      .finally(() => setHomeThemesLoading(false));
+      .then((d) => setInboxSignals(d.signals ?? []))
+      .catch(() => setInboxSignals([]))
+      .finally(() => setInboxLoading(false));
   }, [view, user]);
 
   // Open the lens for a given sector from the briefing (fall back to firm-wide).
@@ -629,22 +650,26 @@ export default function Home() {
     setMemNote(d?.ok ? `nominated to ${d.targetScope} — review in the Memory manager` : d?.error ?? "nomination failed");
   }
 
-  // Turn a signal into its artifact in place (POV / pitch / brief / practice note).
+  // ---- Inbox signal actions (draft-in-place / nominate / dismiss) ----
   function draftLabel(route: string): string {
     if (route === "marketing") return "✍️ Draft POV";
     if (route === "sales") return "✍️ Draft pitch outline";
     if (route === "leadership") return "✍️ Draft brief";
     return "✍️ Draft practice note";
   }
-  async function draftSignal(t: EmergentTheme) {
-    const key = t.insight;
+  async function draftSignal(s: InboxSignal) {
+    const key = s.id;
     if (signalDrafts[key]?.loading) return;
     setSignalDrafts((d) => ({ ...d, [key]: { loading: true } }));
     try {
       const r = await fetch("/api/signals/draft", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ insight: t.insight, route: t.route, action: t.action, sectors: t.support.sectors, count: t.support.count, evidence: t.evidence, user }),
+        body: JSON.stringify({
+          insight: s.title, route: s.route, action: s.detail,
+          sectors: s.support?.sectors ?? (s.sector ? [s.sector] : []),
+          count: s.support?.count ?? 1, evidence: s.evidence, user,
+        }),
       }).then((r) => r.json());
       if (r?.error) setSignalDrafts((d) => ({ ...d, [key]: { error: r.error } }));
       else setSignalDrafts((d) => ({ ...d, [key]: { ...r.draft } }));
@@ -652,16 +677,52 @@ export default function Home() {
       setSignalDrafts((d) => ({ ...d, [key]: { error: "draft failed" } }));
     }
   }
-  async function saveAsset(t: EmergentTheme) {
-    const key = t.insight;
-    const draft = signalDrafts[key];
+  async function saveAsset(s: InboxSignal) {
+    const draft = signalDrafts[s.id];
     if (!draft?.body) return;
     const r = await fetch("/api/signals/save-asset", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: draft.title, kind: draft.kind, body: draft.body, user }),
     }).then((r) => r.json());
-    if (r?.ok) setSignalDrafts((d) => ({ ...d, [key]: { ...d[key], saved: r.path } }));
+    if (r?.ok) setSignalDrafts((d) => ({ ...d, [s.id]: { ...d[s.id], saved: r.path } }));
+  }
+  async function nominateSignal(s: InboxSignal) {
+    const d = await fetch("/api/signals/nominate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ insight: s.title, sectors: s.support?.sectors ?? (s.sector ? [s.sector] : []), user }),
+    }).then((r) => r.json());
+    setMemNote(d?.ok ? `nominated to ${d.targetScope} — review in the Memory manager` : d?.error ?? "nomination failed");
+  }
+  async function dismissSignal(s: InboxSignal) {
+    setDismissed((m) => ({ ...m, [s.id]: true }));
+    fetch("/api/signals/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: s.id, status: "dismissed", user }),
+    }).catch(() => {});
+  }
+  // Family → badge label + emoji.
+  function familyMeta(family: string): { icon: string; label: string } {
+    const m: Record<string, { icon: string; label: string }> = {
+      buying: { icon: "💰", label: "buying signal" },
+      competitive: { icon: "⚔️", label: "competitive" },
+      objection: { icon: "🛑", label: "objection" },
+      churn: { icon: "📉", label: "churn risk" },
+      "early-warning": { icon: "⚠️", label: "early warning" },
+      "delivery-health": { icon: "🩺", label: "delivery health" },
+      "risk-playbook": { icon: "📘", label: "risk playbook" },
+      "new-service-line": { icon: "🌱", label: "new service line" },
+    };
+    return m[family] ?? { icon: "🔔", label: family };
+  }
+  function ageLabel(days?: number): string {
+    if (days == null) return "";
+    if (days <= 0) return "today";
+    if (days === 1) return "1 day ago";
+    if (days < 14) return `${days} days ago`;
+    return `${Math.round(days / 7)} weeks ago`;
   }
 
   // If a user without firm access ends up on the firm-wide lens (e.g. after
@@ -1224,6 +1285,7 @@ export default function Home() {
     setLiveSteps([]);
     setLiveReasoning("");
     setLiveText("");
+    setLivePlan([]);
 
     try {
       const res = await fetch("/api/chat", {
@@ -1261,6 +1323,17 @@ export default function Home() {
           } else if (ev.type === "text") {
             answer += String(ev.text);
             setLiveText(answer);
+          } else if (ev.type === "plan") {
+            setLivePlan((ev.todos as { step: string; status: string }[]) ?? []);
+          } else if (ev.type === "delegate") {
+            if (ev.phase === "start") {
+              const t = String(ev.task ?? "");
+              setLiveSteps((s) => [...s, `🤝 Delegating to ${String(ev.agent)}${t ? `: ${t.slice(0, 72)}${t.length > 72 ? "…" : ""}` : ""}`]);
+            } else {
+              setLiveSteps((s) => [...s, `✅ ${String(ev.agent)} reported back`]);
+            }
+          } else if (ev.type === "subtool") {
+            setLiveSteps((s) => [...s, `↳ ${toolStepLabel(String(ev.name), String(ev.summary))}`]);
           } else if (ev.type === "done") {
             setMessages((ev.history as Message[]) ?? []);
             setTrace((ev.trace as TraceEntry[]) ?? []);
@@ -1285,6 +1358,7 @@ export default function Home() {
       setLiveSteps([]);
       setLiveReasoning("");
       setLiveText("");
+      setLivePlan([]);
     }
   }
 
@@ -1529,8 +1603,8 @@ export default function Home() {
           {canAccessFirmClient(user) && (
             <section className="home-section home-briefing">
               <div className="home-section-head">
-                <h3>🔔 Your briefing</h3>
-                <span className="home-role">signals surfaced across the firm — no query needed</span>
+                <h3>🔔 Signal inbox</h3>
+                <span className="home-role">prioritized from transcripts, risk registers &amp; offer gaps — freshest &amp; most urgent first</span>
               </div>
               {readySectors && readySectors.some((s) => s.ready) && (
                 <div className="ready-row">
@@ -1543,60 +1617,67 @@ export default function Home() {
                 </div>
               )}
               <div className="briefing-signals">
-                {homeThemesLoading && <div className="hint">scanning the firm&apos;s work for emergent signals…</div>}
-                {!homeThemesLoading && homeThemes && homeThemes.length === 0 && (
-                  <div className="hint">No emergent signal yet spans enough engagements.</div>
+                {inboxLoading && <div className="hint">scanning transcripts, risk registers &amp; offer gaps for signals…</div>}
+                {!inboxLoading && inboxSignals && inboxSignals.filter((s) => !dismissed[s.id]).length === 0 && (
+                  <div className="hint">No open signals right now — you&apos;re clear.</div>
                 )}
                 {memNote && <div className="hint briefing-note">{memNote}</div>}
-                {(homeThemes ?? [])
-                  .slice()
-                  .sort((a, b) => (b.route === myRoute ? 1 : 0) - (a.route === myRoute ? 1 : 0))
-                  .map((t, i) => (
-                    <div key={i} className={`theme-card ${t.route === myRoute ? "mine" : ""}`}>
-                      <div className="theme-top">
-                        <span className={`opp-kind route-${t.route}`}>{t.route}</span>
-                        {t.route === myRoute && <span className="for-you">for you</span>}
-                        <span className="theme-count">{t.support.count} engagements · {t.support.sectors.length} sector{t.support.sectors.length === 1 ? "" : "s"}</span>
+                {(inboxSignals ?? []).filter((s) => !dismissed[s.id]).map((s) => {
+                  const fm = familyMeta(s.family);
+                  const mine = s.route === myRoute;
+                  const draft = signalDrafts[s.id];
+                  const alert = ["churn", "early-warning", "delivery-health"].includes(s.family);
+                  return (
+                    <div key={s.id} className={`signal-card ${mine ? "mine" : ""} ${alert ? "alert" : ""}`}>
+                      <div className="signal-top">
+                        <span className={`sig-family fam-${s.family}`}>{fm.icon} {fm.label}</span>
+                        {mine && <span className="for-you">for you</span>}
+                        {s.soft && <span className="sig-soft" title="low-confidence intel — review before acting">needs review</span>}
+                        {s.deIdentified && <span className="space-abstract" title="aggregated across clients — de-identified">🛡 de-identified</span>}
+                        <span className="sig-meta">{s.ageDays != null ? `${ageLabel(s.ageDays)} · ` : ""}conf {Math.round(s.confidence * 100)}%</span>
                       </div>
-                      <div className="theme-insight">{t.insight}</div>
-                      <div className="opp-action">→ {t.action}</div>
-                      <div className="theme-foot">
-                        <span className="theme-sectors">{t.support.sectors.join(" · ")}</span>
+                      <div className="signal-title">{s.title}</div>
+                      <div className="signal-detail">{s.detail}</div>
+                      {s.evidence[0] && <div className="signal-evidence">“{s.evidence[0]}”</div>}
+                      <div className="signal-foot">
+                        {s.support?.sectors && <span className="theme-sectors">{s.support.sectors.join(" · ")}</span>}
                         <div className="theme-actions">
-                          <button className="mini primary" onClick={() => draftSignal(t)} disabled={signalDrafts[t.insight]?.loading} title="draft the artifact from this signal, in place">
-                            {signalDrafts[t.insight]?.loading ? "Drafting…" : draftLabel(t.route)}
-                          </button>
-                          <button className="mini" onClick={() => nominateTheme(t)} title="propose as firm knowledge (enters the review pipeline)">
-                            Nominate
-                          </button>
+                          {s.actions.draft && (
+                            <button className="mini primary" onClick={() => draftSignal(s)} disabled={draft?.loading} title="draft the artifact from this signal, in place">
+                              {draft?.loading ? "Drafting…" : draftLabel(s.route)}
+                            </button>
+                          )}
+                          {s.actions.nominate && (
+                            <button className="mini" onClick={() => nominateSignal(s)} title="propose as firm knowledge (enters the review pipeline)">Nominate</button>
+                          )}
+                          <button className="mini" onClick={() => dismissSignal(s)} title="clear from your inbox">Dismiss</button>
                         </div>
                       </div>
-                      {signalDrafts[t.insight] && !signalDrafts[t.insight].loading && (
+                      {draft && !draft.loading && (
                         <div className="signal-draft">
-                          {signalDrafts[t.insight].error ? (
-                            <div className="hint">⚠️ {signalDrafts[t.insight].error}</div>
+                          {draft.error ? (
+                            <div className="hint">⚠️ {draft.error}</div>
                           ) : (
                             <>
                               <div className="signal-draft-head">
-                                <span className="signal-draft-kind">{signalDrafts[t.insight].kind}</span>
-                                <span className="signal-draft-title">{signalDrafts[t.insight].title}</span>
+                                <span className="signal-draft-kind">{draft.kind}</span>
+                                <span className="signal-draft-title">{draft.title}</span>
                                 <div className="signal-draft-btns">
-                                  <button className="mini" onClick={() => navigator.clipboard?.writeText(signalDrafts[t.insight].body ?? "")}>Copy</button>
-                                  <button className="mini" onClick={() => saveAsset(t)} disabled={!!signalDrafts[t.insight].saved}>
-                                    {signalDrafts[t.insight].saved ? "Saved ✓" : "Save to library"}
-                                  </button>
+                                  <button className="mini" onClick={() => navigator.clipboard?.writeText(draft.body ?? "")}>Copy</button>
+                                  <button className="mini" onClick={() => saveAsset(s)} disabled={!!draft.saved}>{draft.saved ? "Saved ✓" : "Save to library"}</button>
                                 </div>
                               </div>
                               <div className="markdown signal-draft-body">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{signalDrafts[t.insight].body ?? ""}</ReactMarkdown>
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{draft.body ?? ""}</ReactMarkdown>
                               </div>
-                              {signalDrafts[t.insight].saved && <div className="hint">saved to workspace/{signalDrafts[t.insight].saved}</div>}
+                              {draft.saved && <div className="hint">saved to workspace/{draft.saved}</div>}
                             </>
                           )}
                         </div>
                       )}
                     </div>
-                  ))}
+                  );
+                })}
               </div>
             </section>
           )}
@@ -1847,8 +1928,19 @@ export default function Home() {
                   <div className="role">agent</div>
                   <div className="live">
                     {liveReasoning && <div className="live-think">💭 {liveReasoning}</div>}
+                    {livePlan.length > 0 && (
+                      <div className="live-plan">
+                        <div className="live-plan-h">📋 Plan</div>
+                        {livePlan.map((t, i) => (
+                          <div key={i} className={`plan-item plan-${t.status}`}>
+                            <span className="plan-check">{t.status === "done" ? "✓" : t.status === "in_progress" ? "▸" : "○"}</span>
+                            <span>{t.step}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {liveSteps.map((s, i) => (
-                      <div key={i} className="live-step">{s}</div>
+                      <div key={i} className={s.startsWith("↳") ? "live-step live-sub" : "live-step"}>{s}</div>
                     ))}
                     {liveText ? (
                       <div className="markdown">

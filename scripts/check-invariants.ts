@@ -140,6 +140,66 @@ async function main() {
   check("Gov lead can approve company-level", canApprove("callum", "company/lessons") === true);
   check("Gov any member can confirm project-level", canApprove("bob", "project/acme-health") === true);
 
+  // ---- Signal Engine: atom store, freshness, whitespace, gating -----------
+  const { insertAtoms, queryAtoms } = await import("../lib/signals/atoms");
+  const { buildInbox } = await import("../lib/signals/inbox");
+  const { detectWhitespace } = await import("../lib/signals/whitespace");
+  const { canSeeDeliveryHealth } = await import("../lib/team");
+
+  const mkAtom = (o: Partial<Parameters<typeof insertAtoms>[0][number]>) => ({
+    id: "x", type: "buying", text: "t", evidence: "e", source: "s", sourceKind: "client-transcript",
+    project: "p", client: "c", sector: "healthcare", scope: "client/c", confidence: 0.8, urgency: 0.7,
+    sentiment: null, ts: "", week: "", status: "new", ...o,
+  });
+
+  // Scope gating: an internal-transcript atom must NOT appear in a firm-tier read.
+  await insertAtoms([
+    mkAtom({ id: "atom-client", sourceKind: "client-transcript" }),
+    mkAtom({ id: "atom-internal", sourceKind: "internal-transcript", type: "delivery-risk", scope: "project/p" }),
+  ]);
+  const firmTier = queryAtoms({ excludeInternal: true });
+  check("Signal atom store round-trips", queryAtoms({}).some((a) => a.id === "atom-client"));
+  check("Internal-transcript atoms are gated from firm-tier reads",
+    firmTier.some((a) => a.id === "atom-client") && !firmTier.some((a) => a.id === "atom-internal"));
+
+  // Delivery-health gating (derived from internal candour) — lead only.
+  check("Delivery-health visible to the lead", canSeeDeliveryHealth("callum") === true);
+  check("Delivery-health hidden from analyst & sales", canSeeDeliveryHealth("bob") === false && canSeeDeliveryHealth("dana") === false);
+
+  // Whitespace diff: an unmet need FAR from the catalogue surfaces; one we already
+  // sell is suppressed. (embedding-based coverage — deterministic, no API key.)
+  // (identical text within each pair so the pair clusters — this test targets the
+  // coverage DIFF, not the clustering, which is covered by the real-data eval.)
+  const needUncovered = "They need implementation and change management support to execute strategy recommendations, not just strategy development.";
+  const needCovered = "They asked for financial modelling and sensitivity analysis of the business case.";
+  await insertAtoms([
+    mkAtom({ id: "ws-a", type: "unmet-need", project: "wp-a", client: "wc-a", text: needUncovered }),
+    mkAtom({ id: "ws-b", type: "unmet-need", project: "wp-b", client: "wc-b", text: needUncovered }),
+    mkAtom({ id: "cov-a", type: "unmet-need", project: "cp-a", client: "cc-a", text: needCovered }),
+    mkAtom({ id: "cov-b", type: "unmet-need", project: "cp-b", client: "cc-b", text: needCovered }),
+  ]);
+  const ws = await detectWhitespace();
+  check("Whitespace surfaces an unmet need absent from the catalogue", ws.some((w) => /implementation|change|adopt|roll/i.test(w.need)));
+  check("Whitespace suppresses demand we already sell", !ws.some((w) => /financial model|sensitivity/i.test(w.need)));
+
+  // Freshness decay: two identical buying signals, the RECENT one must outrank the old.
+  const today = new Date().toISOString().slice(0, 10);
+  const old = new Date(Date.now() - 90 * 86_400_000).toISOString().slice(0, 10);
+  await insertAtoms([
+    mkAtom({ id: "fresh-new", type: "buying", project: "fp", client: "fc", text: "Adjacent need mentioned for next year.", ts: today, confidence: 0.8 }),
+    mkAtom({ id: "fresh-old", type: "buying", project: "fp", client: "fc", text: "Adjacent need mentioned for next year.", ts: old, confidence: 0.8 }),
+    mkAtom({ id: "soft-low", type: "competitive", project: "fp", client: "fc", text: "Possible competitor hint.", ts: today, confidence: 0.4 }),
+  ]);
+  const inbox = (await buildInbox("dana")).signals;
+  const sNew = inbox.find((s) => s.id === "fresh-new");
+  const sOld = inbox.find((s) => s.id === "fresh-old");
+  check("Freshness decay ranks a recent signal above an identical old one", !!sNew && !!sOld && sNew.score > sOld.score, `new=${sNew?.score} old=${sOld?.score}`);
+
+  // Confidence threshold: a low-confidence transcript signal is flagged soft (→ review).
+  const softSig = inbox.find((s) => s.id === "soft-low");
+  check("Low-confidence intel is flagged soft (routes to review)", softSig?.soft === true);
+  check("High-confidence intel is not flagged soft", sNew?.soft === false);
+
   // cleanup temp DB
   try {
     await fs.rm(dbFile, { force: true });
