@@ -1,0 +1,6 @@
+{
+  "id": "account-acme",
+  "name": "Acme (account)",
+  "type": "account",
+  "scope": { "clients": ["acme"] }
+}

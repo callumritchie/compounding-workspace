@@ -11,6 +11,8 @@
     "index": "sh scripts/with-env.sh tsx scripts/build-index.ts",
     "db:reseed": "sh scripts/with-env.sh tsx scripts/db-reseed.ts",
     "db:maintain": "sh scripts/with-env.sh tsx scripts/db-maintain.ts",
+    "seed:history": "sh scripts/with-env.sh tsx scripts/seed-history.ts",
+    "cards:build": "sh scripts/with-env.sh tsx scripts/cards-build.ts",
     "check:invariants": "sh scripts/with-env.sh tsx scripts/check-invariants.ts",
     "verify": "npm run check:invariants && npm run eval",
     "check:corpus": "sh scripts/with-env.sh tsx scripts/check-corpus.ts"

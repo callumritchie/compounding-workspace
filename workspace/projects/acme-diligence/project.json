@@ -5,5 +5,11 @@
   "sector": "healthcare",
   "type": "diligence",
   "status": "complete",
-  "stakeholders": ["acme-cfo"]
+  "stakeholders": [
+    "acme-cfo"
+  ],
+  "team": [
+    "callum",
+    "bob"
+  ]
 }

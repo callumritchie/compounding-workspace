@@ -48,9 +48,10 @@ export function chatProject(c: ChatMeta): string {
   return c.projectId ?? DEFAULT_PROJECT;
 }
 
-// The two simulated users. Switching between them is how we demo "shared vs
-// private": chat history is PRIVATE, files + memory are SHARED.
-export const USERS = ["callum", "bob"] as const;
+// The simulated users. callum/bob are delivery (lead/analyst); dana/mo are the
+// intelligence roles (sales/marketing) who work across projects, not inside one.
+// Switching between them demos "shared vs private" AND role-based landing.
+export const USERS = ["callum", "bob", "dana", "mo"] as const;
 export type User = (typeof USERS)[number];
 
 // Root of all on-disk state.

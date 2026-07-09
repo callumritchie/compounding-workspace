@@ -24,3 +24,6 @@ workspace/projects/*/compass.json
 
 # TypeScript build cache
 *.tsbuildinfo
+
+# Generated firm library artifacts (runtime state)
+workspace/firm-assets/

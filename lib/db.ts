@@ -141,6 +141,44 @@ CREATE TABLE IF NOT EXISTS audit_log (
   detail    TEXT                                   -- JSON: before/after or notes
 );
 CREATE INDEX IF NOT EXISTS idx_audit_memory ON audit_log(memory_id);
+
+-- Project summary "cards": a compact, generated digest of each engagement (what it
+-- was, key findings, outcome). They're the COARSE layer of cross-project retrieval —
+-- a firm-wide question finds relevant PROJECTS via their cards first, then drills
+-- into those projects' chunks (see lib/cards.ts, lib/retrieval.ts).
+CREATE TABLE IF NOT EXISTS project_cards (
+  project      TEXT PRIMARY KEY,
+  client       TEXT,
+  sector       TEXT,
+  type         TEXT,
+  status       TEXT,
+  title        TEXT,
+  summary      TEXT,
+  key_findings TEXT,                               -- JSON string[]
+  outcome      TEXT,
+  updated      TEXT
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS cards_vec USING vec0(
+  project   TEXT PRIMARY KEY,
+  sector    TEXT,
+  embedding float[${MEM_DIM}] distance_metric=cosine
+);
+
+-- Knowledge-reuse events (ticket C1): every time a piece of firm knowledge learned
+-- ELSEWHERE (a shared-scope learned memory) is applied on a DIFFERENT project, we
+-- log it. This is the compounding the old way-of-working could never measure — the
+-- leadership impact metric ("N insights reused across M engagements").
+CREATE TABLE IF NOT EXISTS reuse_events (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts             TEXT NOT NULL,
+  memory_id      TEXT,
+  scope          TEXT,
+  source_project TEXT,                             -- where the insight was learned
+  target_project TEXT,                             -- where it was reused
+  actor          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reuse_memory ON reuse_events(memory_id);
+CREATE INDEX IF NOT EXISTS idx_reuse_target ON reuse_events(target_project);
 `;
 
 // sqlite-vec takes an embedding as a JSON array string.

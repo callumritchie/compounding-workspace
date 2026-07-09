@@ -1,0 +1,11 @@
+{
+  "name": "Value-based care diligence",
+  "client": "meridian",
+  "sector": "healthcare",
+  "type": "diligence",
+  "status": "complete",
+  "team": [
+    "callum",
+    "bob"
+  ]
+}

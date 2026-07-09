@@ -1,0 +1,10 @@
+{
+  "name": "Chronic-care expansion strategy",
+  "client": "summit",
+  "sector": "healthcare",
+  "type": "strategy",
+  "status": "complete",
+  "team": [
+    "bob"
+  ]
+}

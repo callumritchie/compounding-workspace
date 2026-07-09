@@ -204,7 +204,7 @@ const CONTEXT_WINDOW = 200_000;
 type ChatMeta = { chatId: string; title: string; updated: string; lastUserMessage?: string; openFile?: string | null; agentId?: string; projectId?: string };
 
 // A project's config (mirrors lib/project ProjectConfig) — a client can have several.
-type ProjectMeta = { id: string; name: string; client: string; sector: string; type: string; status: string; memoryCount?: number };
+type ProjectMeta = { id: string; name: string; client: string; sector: string; type: string; status: string; team?: string[]; memoryCount?: number };
 
 // A suggested (not-yet-saved) shared memory awaiting approval.
 type Proposal = { id: string; fact: string; scope: string; proposedBy: string; sourceProject: string; created: string };
@@ -253,10 +253,20 @@ type DupRef = { scope: string; id: string; body: string };
 type DupPair = { a: DupRef; b: DupRef; score: number };
 
 // Client mirror of lib/team.ts — used only to gate the UI (the API is the real
-// gate). Project memory: any team member. Broader scopes: a Lead only.
-const CLIENT_ROLES: Record<string, "lead" | "analyst"> = { callum: "lead", bob: "analyst" };
+// gate). Delivery roles (lead/analyst) work inside projects; intelligence roles
+// (sales/marketing) work across projects and land on the lenses.
+type ClientRole = "lead" | "analyst" | "sales" | "marketing";
+const CLIENT_ROLES: Record<string, ClientRole> = { callum: "lead", bob: "analyst", dana: "sales", mo: "marketing" };
+const ROLE_LABELS: Record<ClientRole, string> = { lead: "Lead", analyst: "Analyst", sales: "Sales / BD", marketing: "Marketing" };
+const USER_NAMES: Record<string, string> = { callum: "Callum", bob: "Bob", dana: "Dana", mo: "Mo" };
 function roleLabelOf(u: string): string {
-  return CLIENT_ROLES[u] === "lead" ? "Lead" : "Analyst";
+  return ROLE_LABELS[CLIENT_ROLES[u] ?? "analyst"];
+}
+function isDeliveryRoleClient(u: string): boolean {
+  return CLIENT_ROLES[u] === "lead" || CLIENT_ROLES[u] === "analyst";
+}
+function canAccessFirmClient(u: string): boolean {
+  return ["lead", "sales", "marketing"].includes(CLIENT_ROLES[u] ?? "analyst");
 }
 function canApproveScope(u: string, scope: string): boolean {
   const level = scope.split("/")[0];
@@ -265,6 +275,29 @@ function canApproveScope(u: string, scope: string): boolean {
   return CLIENT_ROLES[u] === "lead";
 }
 type Leak = { flagged: boolean; hits: string[]; reasons?: string[] };
+
+type SpaceAnswer = {
+  answer: string;
+  projectsUsed: { project: string; title: string; client: string; sector: string }[];
+  abstracted?: boolean;
+  spanned?: number;
+};
+type Opportunity = { title: string; kind: string; rationale: string; suggestedAction: string; projects: string[] };
+type EmergentTheme = {
+  insight: string;
+  route: string;
+  action: string;
+  support: { projects: string[]; clients: string[]; sectors: string[]; count: number };
+  evidence: string[];
+};
+type SectorDensity = { sector: string; projects: number; clients: number; cards: number; lessons: number; ready: boolean };
+type ImpactStats = {
+  totalReuses: number;
+  distinctInsights: number;
+  targetProjects: number;
+  topInsights: { memoryId: string; scope: string; reuses: number; targets: number; body: string }[];
+  byMonth: { month: string; reuses: number }[];
+};
 
 // Mirror of lib/engagement.ts EngagementSummary (kept local so the client bundle
 // doesn't pull server-only deps). Fed by GET /api/engagement.
@@ -320,6 +353,29 @@ export default function Home() {
   // Engagement strip: the standing constraints (phase · budget · next milestone ·
   // top risk) shown at the top of the chat column. Loaded from /api/engagement.
   const [engagement, setEngagement] = useState<EngSummary | null>(null);
+  // Navigation altitude: "home" is the hub (your engagements + the cross-project
+  // lenses); "project" is inside one engagement (files · chat · history).
+  const [view, setView] = useState<"home" | "project" | "space">("home");
+  const [showAllProjects, setShowAllProjects] = useState(false); // leads: mine vs all
+  // Lens: the active cross-project Space id (account/sector/firm), used on Home.
+  const [spaces, setSpaces] = useState<{ id: string; name: string; type: string; projects: number }[]>([]);
+  const [spaceId, setSpaceId] = useState<string | null>(null);
+  const [spaceQuery, setSpaceQuery] = useState("");
+  const [spaceAudience, setSpaceAudience] = useState("consultant");
+  const [spaceLoading, setSpaceLoading] = useState(false);
+  const [spaceAnswer, setSpaceAnswer] = useState<SpaceAnswer | null>(null);
+  const [opps, setOpps] = useState<Opportunity[] | null>(null);
+  const [oppLoading, setOppLoading] = useState(false);
+  const [themes, setThemes] = useState<EmergentTheme[] | null>(null);
+  const [themesLoading, setThemesLoading] = useState(false);
+  // Proactive Home briefing (firm-authorised roles): emergent signals to route +
+  // which sectors are dense enough to pitch. Loaded once per user on landing.
+  const [homeThemes, setHomeThemes] = useState<EmergentTheme[] | null>(null);
+  const [homeThemesLoading, setHomeThemesLoading] = useState(false);
+  const [readySectors, setReadySectors] = useState<SectorDensity[] | null>(null);
+  const briefingUserRef = useRef<string | null>(null);
+  // Drafted artifacts, keyed by the signal's insight text (stable across re-sorts).
+  const [signalDrafts, setSignalDrafts] = useState<Record<string, { loading?: boolean; error?: string; title?: string; kind?: string; body?: string; saved?: string }>>({});
   // Bottom-right proactive popup: which items the user has dismissed this session
   // (keyed by a stable id), and whether the whole popup is collapsed.
   const [popupDismissed, setPopupDismissed] = useState<Record<string, boolean>>({});
@@ -360,6 +416,11 @@ export default function Home() {
   const [lifecycle, setLifecycle] = useState<{ stale: StaleItem[]; duplicates: DupPair[] }>({ stale: [], duplicates: [] });
   // Guided scenario demo mode.
   const [showScenarios, setShowScenarios] = useState(false);
+  const [showImpact, setShowImpact] = useState(false);
+  const [impact, setImpact] = useState<ImpactStats | null>(null);
+  function loadImpact() {
+    fetch("/api/impact").then((r) => r.json()).then(setImpact).catch(() => setImpact(null));
+  }
   const [activeScenario, setActiveScenario] = useState<Scenario | null>(null);
   const [scenarioStep, setScenarioStep] = useState(0);
 
@@ -484,6 +545,174 @@ export default function Home() {
       .catch(() => setEngagement(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, openFile]);
+
+  // Load the available lenses (spaces) once.
+  useEffect(() => {
+    fetch("/api/spaces").then((r) => r.json()).then((d) => setSpaces(d.spaces ?? [])).catch(() => {});
+  }, []);
+
+  // Navigation: open a project (delivery) / open a lens (intelligence) / go home.
+  function openProject(id: string) {
+    setProject(id);
+    setSpaceId(null);
+    setOpenFile(null);
+    setView("project");
+  }
+  function openSpace(id: string) {
+    setSpaceId(id);
+    setSpaceAnswer(null);
+    setOpps(null);
+    setThemes(null);
+    setView("space");
+  }
+  function goHome() {
+    setView("home");
+  }
+  // Intelligence roles (sales/marketing) don't own delivery — keep them on the hub.
+  useEffect(() => {
+    if (!isDeliveryRoleClient(user)) setView("home");
+  }, [user]);
+
+  // The route a user personally owns — used to flag "for you" signals on Home.
+  const myRoute = CLIENT_ROLES[user] === "sales" ? "sales" : CLIENT_ROLES[user] === "marketing" ? "marketing" : CLIENT_ROLES[user] === "lead" ? "leadership" : "";
+
+  // Proactive Home briefing: for firm-authorised roles, prefetch the emergent
+  // signals (slow, LLM) + sector readiness (fast) once when they land on Home.
+  useEffect(() => {
+    if (view !== "home" || !canAccessFirmClient(user)) return;
+    if (briefingUserRef.current === user) return; // already loaded for this persona
+    briefingUserRef.current = user;
+    setReadySectors(null);
+    setHomeThemes(null);
+    setHomeThemesLoading(true);
+    fetch(`/api/home/briefing?user=${user}`).then((r) => r.json()).then((d) => setReadySectors(d.sectors ?? [])).catch(() => setReadySectors([]));
+    fetch(`/api/signals/emergent?user=${user}`)
+      .then((r) => r.json())
+      .then((d) => setHomeThemes(d.themes ?? []))
+      .catch(() => setHomeThemes([]))
+      .finally(() => setHomeThemesLoading(false));
+  }, [view, user]);
+
+  // Open the lens for a given sector from the briefing (fall back to firm-wide).
+  function openSectorLens(sector: string) {
+    const s =
+      spaces.find((sp) => sp.type === "sector" && (sp.name.toLowerCase().includes(sector.toLowerCase()) || sp.id.includes(sector))) ??
+      spaces.find((sp) => sp.type === "firm");
+    if (s) openSpace(s.id);
+  }
+
+  // Clear the space results when switching lens.
+  useEffect(() => { setSpaceAnswer(null); setOpps(null); setThemes(null); }, [spaceId]);
+
+  // Triangulation (G): compute emergent themes — patterns weak in any one engagement
+  // but strong across many. Firm-wide scan; Lead-only.
+  async function runTriangulate() {
+    if (themesLoading) return;
+    setThemesLoading(true);
+    setThemes(null);
+    try {
+      const d = await fetch(`/api/signals/emergent?user=${user}`).then((r) => r.json());
+      if (d?.error) { setSpaceAnswer({ answer: `🔒 ${d.error}`, projectsUsed: [] }); setThemes([]); }
+      else setThemes(d.themes ?? []);
+    } catch {
+      setThemes([]);
+    } finally {
+      setThemesLoading(false);
+    }
+  }
+  async function nominateTheme(t: EmergentTheme) {
+    const d = await fetch("/api/signals/nominate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ insight: t.insight, sectors: t.support.sectors, user }),
+    }).then((r) => r.json());
+    setMemNote(d?.ok ? `nominated to ${d.targetScope} — review in the Memory manager` : d?.error ?? "nomination failed");
+  }
+
+  // Turn a signal into its artifact in place (POV / pitch / brief / practice note).
+  function draftLabel(route: string): string {
+    if (route === "marketing") return "✍️ Draft POV";
+    if (route === "sales") return "✍️ Draft pitch outline";
+    if (route === "leadership") return "✍️ Draft brief";
+    return "✍️ Draft practice note";
+  }
+  async function draftSignal(t: EmergentTheme) {
+    const key = t.insight;
+    if (signalDrafts[key]?.loading) return;
+    setSignalDrafts((d) => ({ ...d, [key]: { loading: true } }));
+    try {
+      const r = await fetch("/api/signals/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ insight: t.insight, route: t.route, action: t.action, sectors: t.support.sectors, count: t.support.count, evidence: t.evidence, user }),
+      }).then((r) => r.json());
+      if (r?.error) setSignalDrafts((d) => ({ ...d, [key]: { error: r.error } }));
+      else setSignalDrafts((d) => ({ ...d, [key]: { ...r.draft } }));
+    } catch {
+      setSignalDrafts((d) => ({ ...d, [key]: { error: "draft failed" } }));
+    }
+  }
+  async function saveAsset(t: EmergentTheme) {
+    const key = t.insight;
+    const draft = signalDrafts[key];
+    if (!draft?.body) return;
+    const r = await fetch("/api/signals/save-asset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: draft.title, kind: draft.kind, body: draft.body, user }),
+    }).then((r) => r.json());
+    if (r?.ok) setSignalDrafts((d) => ({ ...d, [key]: { ...d[key], saved: r.path } }));
+  }
+
+  // If a user without firm access ends up on the firm-wide lens (e.g. after
+  // switching to an analyst), drop them back to Home.
+  useEffect(() => {
+    if (spaceId && !canAccessFirmClient(user) && spaces.find((s) => s.id === spaceId)?.type === "firm") {
+      setSpaceId(null);
+      setView("home");
+    }
+  }, [user, spaceId, spaces]);
+
+  // Proactively spot opportunities across the space's engagements (follow-on for
+  // accounts; offerings / POVs / BD plays for sector & firm). Structured, not prose.
+  async function spotSpaceOpportunities() {
+    if (!spaceId || oppLoading) return;
+    setOppLoading(true);
+    setOpps(null);
+    try {
+      const d = await fetch("/api/space/opportunities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spaceId, user }),
+      }).then((r) => r.json());
+      if (d?.error) { setSpaceAnswer({ answer: `🔒 ${d.error}`, projectsUsed: [] }); setOpps([]); }
+      else setOpps(d.opportunities ?? []);
+    } catch {
+      setOpps([]);
+    } finally {
+      setOppLoading(false);
+    }
+  }
+
+  // Ask a cross-project question of the active space (coarse→fine→map→reduce on the
+  // server). Non-streaming: it's a synthesis over many engagements, not a chat turn.
+  async function runSpaceQuery() {
+    if (!spaceId || !spaceQuery.trim() || spaceLoading) return;
+    setSpaceLoading(true);
+    setSpaceAnswer(null);
+    try {
+      const d = await fetch("/api/space/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spaceId, query: spaceQuery, audience: spaceAudience, user }),
+      }).then((r) => r.json());
+      setSpaceAnswer(d?.error ? { answer: `🔒 ${d.error}`, projectsUsed: [] } : d);
+    } catch {
+      setSpaceAnswer({ answer: "Something went wrong.", projectsUsed: [] });
+    } finally {
+      setSpaceLoading(false);
+    }
+  }
 
   // Reset the guidance surfaces when switching chat or project so stale
   // suggestions never linger and a re-dismissed strip can reappear.
@@ -694,6 +923,17 @@ export default function Home() {
         .catch(() => ({ history: [] }));
       setMemHistory((h) => ({ ...h, [key]: d.history ?? [] }));
     }
+  }
+  // Outcome loop (C3): mark whether a memory's guidance actually worked. Importance
+  // moves on correctness, not usage.
+  async function setMemOutcome(m: MemItem, worked: boolean) {
+    await fetch("/api/memory/outcome", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: m.scope, id: m.id, worked, user }),
+    });
+    setMemNote(`${worked ? "reinforced (worked)" : "downweighted (didn't work)"} ${m.scope}/${m.id}`);
+    loadMemories();
   }
   // Run memory maintenance (decay untouched learned memory) when the manager opens.
   function runMaintain() {
@@ -1065,56 +1305,327 @@ export default function Home() {
     }
   }
 
+  // The cross-project lens screen (an "intelligence" altitude, not inside a project).
+  const activeSpace = spaces.find((s) => s.id === spaceId);
+  function renderSpaceView() {
+    return (
+      <div className="space-screen">
+        <div className="space-view">
+          <div className="space-head">
+            <span className="space-title">🔭 {activeSpace?.name}</span>
+            <span className="space-sub">
+              querying across {activeSpace?.projects ?? 0} engagements
+              {(spaceAnswer?.abstracted ?? activeSpace?.type !== "account") && (
+                <span className="space-abstract" title="spans multiple clients — answers are de-identified">🛡 de-identified</span>
+              )}
+            </span>
+          </div>
+          <div className="space-ask">
+            <textarea
+              value={spaceQuery}
+              onChange={(e) => setSpaceQuery(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runSpaceQuery(); } }}
+              placeholder="Ask across these engagements… e.g. 'Where does convenience-driven pricing let us down, and what should we pitch instead?'"
+            />
+            <div className="space-ask-row">
+              <label className="space-audience">
+                for
+                <select value={spaceAudience} onChange={(e) => setSpaceAudience(e.target.value)}>
+                  <option value="consultant">delivery</option>
+                  <option value="sales">sales / BD</option>
+                  <option value="marketing">marketing</option>
+                  <option value="leadership">leadership</option>
+                </select>
+              </label>
+              <div className="space-ask-btns">
+                {activeSpace?.type === "firm" && (
+                  <button className="mini" onClick={runTriangulate} disabled={themesLoading} title="find emergent themes — weak in one engagement, strong across many">
+                    {themesLoading ? "Triangulating…" : "🔺 Triangulate"}
+                  </button>
+                )}
+                <button className="mini" onClick={spotSpaceOpportunities} disabled={oppLoading} title="proactively surface follow-on / offering / BD opportunities">
+                  {oppLoading ? "Spotting…" : "✨ Spot opportunities"}
+                </button>
+                <button onClick={runSpaceQuery} disabled={spaceLoading || !spaceQuery.trim()}>
+                  {spaceLoading ? "Synthesising…" : "Ask across projects"}
+                </button>
+              </div>
+            </div>
+          </div>
+          {opps && (
+            <div className="space-opps">
+              {opps.length === 0 ? (
+                <div className="hint">No clear opportunities surfaced.</div>
+              ) : (
+                opps.map((o, i) => (
+                  <div key={i} className="opp-card">
+                    <div className="opp-head">
+                      <span className={`opp-kind opp-${o.kind}`}>{o.kind}</span>
+                      <span className="opp-title">{o.title}</span>
+                    </div>
+                    <div className="opp-why">{o.rationale}</div>
+                    <div className="opp-action">→ {o.suggestedAction}</div>
+                    {o.projects.length > 0 && (
+                      <div className="opp-prov">{o.projects.map((p, j) => <span key={j} className="space-prov-chip">{p}</span>)}</div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+          {themes && (
+            <div className="space-themes">
+              <div className="themes-head">🔺 Emergent signals — patterns weak in one engagement, strong across many</div>
+              {themes.length === 0 ? (
+                <div className="hint">No theme yet spans enough engagements to be emergent.</div>
+              ) : (
+                themes.map((t, i) => (
+                  <div key={i} className="theme-card">
+                    <div className="theme-top">
+                      <span className={`opp-kind route-${t.route}`}>{t.route}</span>
+                      <span className="theme-count">{t.support.count} engagements · {t.support.sectors.length} sector{t.support.sectors.length === 1 ? "" : "s"}</span>
+                    </div>
+                    <div className="theme-insight">{t.insight}</div>
+                    <div className="opp-action">→ {t.action}</div>
+                    <div className="theme-foot">
+                      <span className="theme-sectors">{t.support.sectors.join(" · ")}</span>
+                      <button className="mini" onClick={() => nominateTheme(t)} title="propose as firm knowledge (enters the review pipeline)">
+                        Nominate to firm memory
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+          {spaceLoading && <div className="hint">coarse → fine → extract per engagement → synthesise…</div>}
+          {spaceAnswer && (
+            <div className="space-answer">
+              <div className="markdown">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{spaceAnswer.answer}</ReactMarkdown>
+              </div>
+              {spaceAnswer.projectsUsed.length > 0 && (
+                <div className="space-provenance">
+                  <span className="space-prov-label">Drawn from {spaceAnswer.projectsUsed.length} engagements:</span>
+                  {spaceAnswer.projectsUsed.map((p) => (
+                    <span key={p.project} className="space-prov-chip" title={`${p.client} · ${p.sector}`}>
+                      {p.title}{p.client !== "(withheld)" ? ` · ${p.client}` : ""}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Home: which engagements are "yours" (team membership), split by status.
+  const myProjects = projects.filter((p) => showAllProjects || (p.team ?? []).includes(user));
+  const activeProjects = myProjects.filter((p) => p.status !== "complete");
+  const completedProjects = myProjects.filter((p) => p.status === "complete");
+  const visibleLenses = spaces.filter((s) => s.type !== "firm" || canAccessFirmClient(user));
+
   return (
     <div className="app">
       {/* ---- Top bar ---- */}
       <div className="topbar">
-        <h1>
+        <h1 className="home-link" onClick={goHome} title="back to Home">
           Compounding Workspace
           <span className="subtitle">context engineering, made visible</span>
         </h1>
+        {view !== "home" && (
+          <span className="crumb">
+            <button className="crumb-home" onClick={goHome}>‹ Home</button>
+            <span className="crumb-sep">/</span>
+            <span className="crumb-proj">
+              {view === "project"
+                ? projects.find((p) => p.id === project)?.name ?? project
+                : `🔭 ${activeSpace?.name ?? "Lens"}`}
+            </span>
+          </span>
+        )}
         <div className="topbar-right">
-          <select className="project-select" value={project} onChange={(e) => setProject(e.target.value)} title="project (grouped by client · ✓ complete, ● in-progress)">
-            {Object.entries(
-              projects.reduce<Record<string, ProjectMeta[]>>((acc, p) => {
-                (acc[p.client] ||= []).push(p);
-                return acc;
-              }, {})
-            ).map(([client, ps]) => (
-              <optgroup key={client} label={client}>
-                {ps.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.status === "complete" ? "✓" : "●"} {p.name} · {p.type}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-          <button className="queue-btn scenarios-btn" onClick={() => setShowScenarios(true)}>
-            ✨ Scenarios
-          </button>
-          <button className="queue-btn" onClick={() => { loadAgents(); setShowAgents(true); }}>
-            🤖 Agents
-          </button>
+          {view === "project" && (
+            <>
+              <button className="queue-btn scenarios-btn" onClick={() => setShowScenarios(true)}>✨ Scenarios</button>
+              <button className="queue-btn" onClick={() => { loadAgents(); setShowAgents(true); }}>🤖 Agents</button>
+            </>
+          )}
           <button
             className="queue-btn"
             onClick={() => { loadMemories(); loadProposals(); loadPromotions(); loadSignals(); loadLifecycle(); runMaintain(); setShowMemory(true); }}
           >
-            🧠 Memory manager{proposals.length + nominations.length ? ` (${proposals.length + nominations.length})` : ""}
+            🧠 Memory{proposals.length + nominations.length ? ` (${proposals.length + nominations.length})` : ""}
+          </button>
+          <button className="queue-btn" onClick={() => { loadImpact(); setShowImpact(true); }} title="how much firm knowledge is being reused across engagements">
+            📈 Impact
           </button>
           <div className="user-switch">
             <span className="subtitle">You are:</span>
-            <button className={`callum ${user === "callum" ? "active" : ""}`} onClick={() => setUser("callum")}>
-              Callum <span className="role-badge">Lead</span>
-            </button>
-            <button className={`bob ${user === "bob" ? "active" : ""}`} onClick={() => setUser("bob")}>
-              Bob <span className="role-badge">Analyst</span>
-            </button>
+            <select className="user-select" value={user} onChange={(e) => setUser(e.target.value as User)} title="switch persona">
+              {(["callum", "bob", "dana", "mo"] as const).map((u) => (
+                <option key={u} value={u}>{USER_NAMES[u]} · {roleLabelOf(u)}</option>
+              ))}
+            </select>
           </div>
         </div>
       </div>
 
-      {/* ---- Three panels ---- */}
+      {/* ---- Home hub: your engagements + the cross-project lenses ---- */}
+      {view === "home" && (
+        <div className="home">
+          <div className="home-hero">
+            <div>
+              <h2>Home</h2>
+              <span className="home-role">{USER_NAMES[user]} · {roleLabelOf(user)}</span>
+            </div>
+          </div>
+
+          {isDeliveryRoleClient(user) && (
+            <section className="home-section">
+              <div className="home-section-head">
+                <h3>Your engagements</h3>
+                {CLIENT_ROLES[user] === "lead" && (
+                  <label className="home-toggle">
+                    <input type="checkbox" checked={showAllProjects} onChange={(e) => setShowAllProjects(e.target.checked)} /> show all firm engagements
+                  </label>
+                )}
+              </div>
+              {myProjects.length === 0 ? (
+                <div className="empty">No engagements assigned to you yet.</div>
+              ) : (
+                <>
+                  {activeProjects.length > 0 && <div className="home-group-label">Active</div>}
+                  <div className="proj-grid">
+                    {activeProjects.map((p) => (
+                      <button key={p.id} className="proj-card" onClick={() => openProject(p.id)}>
+                        <div className="proj-card-top">
+                          <span className="proj-card-name">{p.name}</span>
+                          <span className="proj-card-status active">● active</span>
+                        </div>
+                        <div className="proj-card-meta">{p.client} · {p.sector} · {p.type}</div>
+                      </button>
+                    ))}
+                  </div>
+                  {completedProjects.length > 0 && <div className="home-group-label">Completed</div>}
+                  <div className="proj-grid">
+                    {completedProjects.map((p) => (
+                      <button key={p.id} className="proj-card done" onClick={() => openProject(p.id)}>
+                        <div className="proj-card-top">
+                          <span className="proj-card-name">{p.name}</span>
+                          <span className="proj-card-status done">✓ complete</span>
+                        </div>
+                        <div className="proj-card-meta">{p.client} · {p.sector} · {p.type}</div>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </section>
+          )}
+
+          {canAccessFirmClient(user) && (
+            <section className="home-section home-briefing">
+              <div className="home-section-head">
+                <h3>🔔 Your briefing</h3>
+                <span className="home-role">signals surfaced across the firm — no query needed</span>
+              </div>
+              {readySectors && readySectors.some((s) => s.ready) && (
+                <div className="ready-row">
+                  {readySectors.filter((s) => s.ready).map((s) => (
+                    <button key={s.sector} className="ready-card" onClick={() => openSectorLens(s.sector)} title="open this sector lens">
+                      <span className="ready-sector">🟢 {s.sector.replace(/-/g, " ")}</span>
+                      <span className="ready-meta">{s.clients} clients · {s.cards} engagements · ready to pitch</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="briefing-signals">
+                {homeThemesLoading && <div className="hint">scanning the firm&apos;s work for emergent signals…</div>}
+                {!homeThemesLoading && homeThemes && homeThemes.length === 0 && (
+                  <div className="hint">No emergent signal yet spans enough engagements.</div>
+                )}
+                {memNote && <div className="hint briefing-note">{memNote}</div>}
+                {(homeThemes ?? [])
+                  .slice()
+                  .sort((a, b) => (b.route === myRoute ? 1 : 0) - (a.route === myRoute ? 1 : 0))
+                  .map((t, i) => (
+                    <div key={i} className={`theme-card ${t.route === myRoute ? "mine" : ""}`}>
+                      <div className="theme-top">
+                        <span className={`opp-kind route-${t.route}`}>{t.route}</span>
+                        {t.route === myRoute && <span className="for-you">for you</span>}
+                        <span className="theme-count">{t.support.count} engagements · {t.support.sectors.length} sector{t.support.sectors.length === 1 ? "" : "s"}</span>
+                      </div>
+                      <div className="theme-insight">{t.insight}</div>
+                      <div className="opp-action">→ {t.action}</div>
+                      <div className="theme-foot">
+                        <span className="theme-sectors">{t.support.sectors.join(" · ")}</span>
+                        <div className="theme-actions">
+                          <button className="mini primary" onClick={() => draftSignal(t)} disabled={signalDrafts[t.insight]?.loading} title="draft the artifact from this signal, in place">
+                            {signalDrafts[t.insight]?.loading ? "Drafting…" : draftLabel(t.route)}
+                          </button>
+                          <button className="mini" onClick={() => nominateTheme(t)} title="propose as firm knowledge (enters the review pipeline)">
+                            Nominate
+                          </button>
+                        </div>
+                      </div>
+                      {signalDrafts[t.insight] && !signalDrafts[t.insight].loading && (
+                        <div className="signal-draft">
+                          {signalDrafts[t.insight].error ? (
+                            <div className="hint">⚠️ {signalDrafts[t.insight].error}</div>
+                          ) : (
+                            <>
+                              <div className="signal-draft-head">
+                                <span className="signal-draft-kind">{signalDrafts[t.insight].kind}</span>
+                                <span className="signal-draft-title">{signalDrafts[t.insight].title}</span>
+                                <div className="signal-draft-btns">
+                                  <button className="mini" onClick={() => navigator.clipboard?.writeText(signalDrafts[t.insight].body ?? "")}>Copy</button>
+                                  <button className="mini" onClick={() => saveAsset(t)} disabled={!!signalDrafts[t.insight].saved}>
+                                    {signalDrafts[t.insight].saved ? "Saved ✓" : "Save to library"}
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="markdown signal-draft-body">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{signalDrafts[t.insight].body ?? ""}</ReactMarkdown>
+                              </div>
+                              {signalDrafts[t.insight].saved && <div className="hint">saved to workspace/{signalDrafts[t.insight].saved}</div>}
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            </section>
+          )}
+
+          <section className="home-section">
+            <div className="home-section-head">
+              <h3>{isDeliveryRoleClient(user) ? "Across your work" : "Your workspace — across engagements"}</h3>
+            </div>
+            <p className="home-hint">
+              Query, spot opportunities, and triangulate signals across many engagements. Answers are de-identified where client data is combined.
+            </p>
+            <div className="lens-grid">
+              {visibleLenses.map((s) => (
+                <button key={s.id} className={`lens-card lens-${s.type}`} onClick={() => openSpace(s.id)}>
+                  <span className="lens-icon">{s.type === "account" ? "🏢" : s.type === "sector" ? "🌐" : "🏛"}</span>
+                  <span className="lens-name">{s.name}</span>
+                  <span className="lens-meta">{s.type} · {s.projects} engagements</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* ---- Cross-project lens screen (intelligence altitude) ---- */}
+      {view === "space" && renderSpaceView()}
+
+      {/* ---- Project workspace: three panels ---- */}
+      {view === "project" && (
       <div className="panels">
         {/* Left: Files (shared) */}
         <div className="panel">
@@ -1431,6 +1942,7 @@ export default function Home() {
           </div>
         </div>
       </div>
+      )}
 
       {/* ---- Proactive popup (bottom-right): the agent initiates ----
           Surfaces things that need the user — pending approvals (today buried in
@@ -1443,8 +1955,9 @@ export default function Home() {
         const props = proposals.filter((p) => !popupDismissed[p.id]);
         const noms = nominations.filter((n) => !popupDismissed[n.id]);
         const count = (showOffer ? 1 : 0) + props.length + noms.length;
-        // Hide during a guided scenario — the scenario guide owns the bottom-right.
-        if (count === 0 || activeScenario) return null;
+        // Hide during a guided scenario — the scenario guide owns the bottom-right —
+        // and off the Home/lens screens (the popup is delivery, project-scoped).
+        if (count === 0 || activeScenario || view !== "project") return null;
         return (
           <div className="nudge">
             <div className="nudge-head">
@@ -1674,6 +2187,48 @@ export default function Home() {
         </div>
       )}
 
+      {showImpact && (
+        <div className="modal-overlay" onClick={() => setShowImpact(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h2>📈 Impact — the compounding</h2>
+              <button onClick={() => setShowImpact(false)}>×</button>
+            </div>
+            <p className="modal-intro">
+              The reuse the old way of working can&apos;t measure: firm knowledge learned on one engagement, applied on another.
+            </p>
+            {!impact ? (
+              <div className="hint">loading…</div>
+            ) : (
+              <div className="impact">
+                <div className="impact-stats">
+                  <div className="impact-stat"><b>{impact.totalReuses}</b><span>insight reuses</span></div>
+                  <div className="impact-stat"><b>{impact.distinctInsights}</b><span>distinct insights reused</span></div>
+                  <div className="impact-stat"><b>{impact.targetProjects}</b><span>engagements benefited</span></div>
+                </div>
+                <div className="impact-headline">
+                  {impact.totalReuses === 0
+                    ? "No cross-engagement reuse recorded yet — it accrues as shared knowledge is applied on new projects."
+                    : `${impact.distinctInsights} insight${impact.distinctInsights === 1 ? "" : "s"} reused across ${impact.targetProjects} engagement${impact.targetProjects === 1 ? "" : "s"}.`}
+                </div>
+                {impact.topInsights.length > 0 && (
+                  <div className="impact-top">
+                    <div className="impact-top-head">Most-reused insights</div>
+                    {impact.topInsights.map((t) => (
+                      <div key={`${t.scope}/${t.memoryId}`} className="impact-row">
+                        <span className="pill ranked">{t.scope}</span>
+                        <span className="impact-body">{t.body ? (t.body.length > 90 ? t.body.slice(0, 90) + "…" : t.body) : t.memoryId}</span>
+                        <span className="impact-count" title="reuses · engagements">{t.reuses}× · {t.targets} proj</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {showMemory && (
         <div className="modal-overlay" onClick={() => setShowMemory(false)}>
           <div className="modal wide" onClick={(e) => e.stopPropagation()}>
@@ -1867,6 +2422,16 @@ export default function Home() {
                                 >
                                   Archive
                                 </button>
+                              )}
+                              {!isConstitution && !retracted && (
+                                <>
+                                  <button className="mini" title="this memory's guidance worked → reinforce it (importance up)" onClick={() => setMemOutcome(m, true)}>
+                                    👍 Worked
+                                  </button>
+                                  <button className="mini" title="its guidance didn't hold → downweight it (importance down)" onClick={() => setMemOutcome(m, false)}>
+                                    👎 Didn&apos;t
+                                  </button>
+                                </>
                               )}
                               <button className="mini" title="who changed this memory, and when" onClick={() => toggleHistory(m)}>
                                 History

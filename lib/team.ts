@@ -13,12 +13,23 @@
    roles/permissions; here it's a tiny, legible table.
 --------------------------------------------------------------------------- */
 
-export type Role = "lead" | "analyst";
+// Delivery roles work INSIDE projects (lead, analyst). Intelligence roles work
+// ACROSS projects and never own delivery (sales, marketing) — their home is the
+// cross-project lenses, not a project workspace.
+export type Role = "lead" | "analyst" | "sales" | "marketing";
 
 export const TEAM: Record<string, { role: Role; label: string }> = {
   callum: { role: "lead", label: "Lead" },
   bob: { role: "analyst", label: "Analyst" },
+  dana: { role: "sales", label: "Sales / BD" },
+  mo: { role: "marketing", label: "Marketing" },
 };
+
+// Delivery roles land on their engagements; intelligence roles land on the lenses.
+export function isDeliveryRole(user: string): boolean {
+  const r = roleOf(user);
+  return r === "lead" || r === "analyst";
+}
 
 export function roleOf(user: string): Role {
   return TEAM[user]?.role ?? "analyst";
@@ -45,4 +56,20 @@ export function canApprove(user: string, scope: string): boolean {
 export function approvalBlockReason(user: string, scope: string): string | null {
   if (canApprove(user, scope)) return null;
   return `Only a Lead can approve ${levelOf(scope)}-level memory.`;
+}
+
+// Cross-project SPACE access (ticket H1 / F2). Querying across many clients is a
+// governance decision, not just a retrieval one. Account + sector lenses are open
+// to the team; the firm-wide lens (which combines every client) is leadership-only.
+// This is the query-time access boundary that complements de-identification.
+export function canAccessSpace(user: string, spaceType: "account" | "sector" | "firm"): boolean {
+  // Firm-wide combines every client → the cross-client-authorised roles only
+  // (lead + the intelligence roles whose job it is). A delivery analyst can't.
+  if (spaceType === "firm") return ["lead", "sales", "marketing"].includes(roleOf(user));
+  return true; // account + sector open to all (cross-client results are de-identified)
+}
+
+export function spaceAccessBlockReason(user: string, spaceType: "account" | "sector" | "firm"): string | null {
+  if (canAccessSpace(user, spaceType)) return null;
+  return "The firm-wide lens combines every client's data — it's limited to Leads and the sales/marketing team.";
 }

@@ -1,0 +1,10 @@
+{
+  "name": "Payments acquisition diligence",
+  "client": "atlas",
+  "sector": "financial-services",
+  "type": "diligence",
+  "status": "complete",
+  "team": [
+    "bob"
+  ]
+}
