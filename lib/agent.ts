@@ -23,6 +23,7 @@ import { getMemoriesForContext } from "./memory";
 import { readFile, listFiles } from "./corpus";
 import { getProjectConfig } from "./project";
 import { getEngagement, engagementDigest } from "./engagement";
+import { getObjectives } from "./objectives";
 
 // The reasoning engine. `claude-opus-4-8` is Anthropic's most capable Opus model,
 // used for the main agent loop. FAST_MODEL (Haiku) handles the cheap auxiliary
@@ -64,6 +65,23 @@ request — say so in one short line that cites the specific constraint, then st
 your best substantive answer. Don't let constraints stop you from thinking; use them
 to make the advice land in reality. Be concise, direct, and practical.`;
 
+// Web search is OFF by default and, when the user turns it on, tightly fenced:
+// these are research engagements, so external material must never be mistaken for —
+// or blended into — the project's own research. This clause is appended to the
+// system prompt only when the user has enabled search for the conversation.
+export const WEB_SEARCH_GUARDRAIL = `EXTERNAL WEB SEARCH is enabled for this conversation. Use it ONLY for context that legitimately lives outside the project corpus — background on the client or its sector, or methodology questions — never to answer questions the project's own files should answer.
+Rules you must follow:
+  • Before searching, say in one short line WHAT you're about to look up externally and WHY, so the user stays in control.
+  • Clearly label anything drawn from the web as "🌐 EXTERNAL" and keep it in its own part of the answer — never present external material as the project's research or blend the two.
+  • NEVER save external content to the corpus (write_file) or to memory (save_memory). External context is for the conversation only; it must not enter the research record.
+If web search isn't clearly appropriate, don't use it — answer from the project files.`;
+
+// The Anthropic server-side web search tool. Server-executed: results come back as
+// server_tool_use / web_search_tool_result blocks and NEVER pass through this app's
+// client-side executeTool — so they are structurally incapable of reaching
+// write_file or save_memory. That server/client split is the quarantine.
+const WEB_SEARCH_TOOL = { type: "web_search_20260209", name: "web_search", max_uses: 5 } as const;
+
 // The SDK reads ANTHROPIC_API_KEY from the environment (including .env.local).
 const client = new Anthropic();
 
@@ -101,6 +119,7 @@ export async function runAgent(
     volatileBlock?: string;
     agent?: AgentSpec; // which agent (persona/model/tools); omitted → the default
     subagents?: SubagentSpec[]; // specialists the agent may `delegate` to (deep agents only)
+    webSearch?: boolean; // opt-in external web search (off by default; quarantined + guarded)
   },
   onEvent?: (ev: AgentEvent) => void
 ): Promise<AgentResult> {
@@ -125,6 +144,13 @@ export async function runAgent(
     { type: "text", text: stableSystem, cache_control: { type: "ephemeral" } },
   ];
   if (opts.volatileBlock) system.push({ type: "text", text: opts.volatileBlock });
+  // The web-search guardrail rides the volatile tier (per-conversation setting, so
+  // it must not sit inside the cached prefix). Only present when the user opted in.
+  if (opts.webSearch) system.push({ type: "text", text: WEB_SEARCH_GUARDRAIL });
+
+  // Offer the server-side web search tool ONLY when the user enabled it. Typed as
+  // the tool union so the custom tools and the server tool can share one array.
+  const requestTools: Anthropic.ToolUnion[] = opts.webSearch ? [...tools, WEB_SEARCH_TOOL] : tools;
 
   // The running conversation. We start from history and append the model's
   // tool-use turns and our tool-result turns as the loop runs.
@@ -144,7 +170,7 @@ export async function runAgent(
         max_tokens: 4096,
         thinking: { type: "adaptive" }, // let the model think as much as the task needs
         system,
-        tools,
+        tools: requestTools,
         messages: convo,
       });
       for await (const event of stream) {
@@ -181,6 +207,24 @@ export async function runAgent(
     const toolUses = response.content.filter(
       (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
     );
+
+    // Surface any EXTERNAL web searches (server-executed) in the glass-box trace so
+    // the user can see exactly what the agent looked up outside the corpus. These
+    // blocks never touch executeTool — the results stay quarantined from the corpus.
+    for (const b of response.content) {
+      if (b.type === "server_tool_use" && b.name === "web_search") {
+        const q = String((b.input as { query?: unknown })?.query ?? "");
+        onEvent?.({ type: "tool", name: "web_search", input: { query: q }, summary: `🌐 EXTERNAL web search: "${q}"` });
+        trace.push({ tool: "web_search", input: { query: q }, summary: `🌐 EXTERNAL web search: "${q}"`, result: "(external — not saved to corpus or memory)" });
+      }
+    }
+
+    // Server tools run inside the model turn; if that server loop paused (hit its
+    // iteration cap), resume by re-sending the assistant turn — don't treat it as done.
+    if (response.stop_reason === "pause_turn") {
+      convo.push({ role: "assistant", content: response.content });
+      continue;
+    }
 
     // No tool requested → the model is done. Return its text.
     if (response.stop_reason !== "tool_use" || toolUses.length === 0) {
@@ -422,9 +466,11 @@ export async function draftKickoff(projectId: string, user: string, opts?: { ref
   const cfg = await getProjectConfig(projectId);
   const memory = await inheritedMemoryLines(projectId, user);
   const brief = await readFile(projectId, "brief.md").catch(() => "");
+  const objectives = await getObjectives(projectId);
+  const objectivesText = objectives?.length ? objectives.map((o) => `- ${o}`).join("\n") : "";
 
   // Signature of the inputs: if unchanged since last time, reuse the cached brief.
-  const sig = createHash("sha1").update(`${user}\n${memory}\n${brief}`).digest("hex");
+  const sig = createHash("sha1").update(`${user}\n${memory}\n${brief}\n${objectivesText}`).digest("hex");
   const cacheFile = kickoffCacheFile(projectId);
   if (!opts?.refresh) {
     try {
@@ -439,18 +485,19 @@ export async function draftKickoff(projectId: string, user: string, opts?: { ref
     model: FAST_MODEL,
     max_tokens: 600,
     system:
-      "You brief a consultant starting a project, using ONLY the inherited team memory and kick-off brief provided. " +
+      "You brief a consultant starting a project, using ONLY the objectives, inherited team memory and kick-off brief provided. " +
       "Write for a non-technical reader. Return STRICT JSON: " +
       `{"brief": string, "questions": string[]}. ` +
-      "brief = 3-5 plain sentences on what we already know going in (the sector, this client, key people, firm approach); " +
-      "if little is known, say so honestly and keep it short. " +
+      "brief = 3-5 plain sentences on what we already know going in (the engagement's objectives, the sector, this client, key people, firm approach); " +
+      "lead with what success looks like per the objectives; if little is known, say so honestly and keep it short. " +
       "questions = exactly 3 short, specific starter questions the consultant could click to ask right now, " +
-      "each motivated by something in the memory or brief. No preamble, JSON only.",
+      "each motivated by something in the objectives, memory or brief. No preamble, JSON only.",
     messages: [
       {
         role: "user",
         content:
           `Project: ${cfg.name} — client "${cfg.client}", sector ${cfg.sector}, type ${cfg.type}.\n\n` +
+          `Objectives (the signed-off north star):\n${objectivesText || "(none stated)"}\n\n` +
           `Inherited team memory:\n${memory || "(none yet)"}\n\n` +
           `Kick-off brief:\n${brief ? brief.slice(0, 2000) : "(no brief file)"}\n\nJSON:`,
       },

@@ -6,6 +6,6 @@
   "nominatedBy": "bob",
   "sourceProject": "acme-diligence",
   "sourceClient": "acme",
-  "status": "pending",
+  "status": "promoted",
   "created": "2026-07-01"
 }

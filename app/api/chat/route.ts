@@ -23,6 +23,7 @@ import {
 import { runAgent, type AgentEvent } from "@/lib/agent";
 import { buildWorkingContext } from "@/lib/context";
 import { getEngagement, engagementDigest } from "@/lib/engagement";
+import { getObjectives, objectivesDigest } from "@/lib/objectives";
 import { recordReuse } from "@/lib/reuse";
 import { assembleContext, estimateTokens } from "@/lib/assemble";
 import { getRelevantMemories, recordMemoryUse, graduateOnUse } from "@/lib/memory";
@@ -41,6 +42,7 @@ export async function POST(req: Request) {
     ? body.recentActions.filter((x: unknown): x is string => typeof x === "string")
     : [];
   const chatId: string | null = typeof body?.chatId === "string" ? body.chatId : null;
+  const webSearch: boolean = body?.webSearch === true; // off unless the user explicitly enabled it
 
   if (!isUser(user)) return Response.json({ error: "unknown user" }, { status: 400 });
   if (!message) return Response.json({ error: "empty message" }, { status: 400 });
@@ -91,7 +93,14 @@ export async function POST(req: Request) {
   // projects with no engagement.md.
   const engagement = await getEngagement(project);
   const engagementBlock = engagement ? engagementDigest(engagement) : "";
-  const volatileBlock = [engagementBlock, assembled.volatileBlock].filter(Boolean).join("\n\n");
+
+  // Objectives are the engagement's NORTH STAR (files/objectives.md). Like the
+  // constraints they're standing context, so they lead the volatile block every
+  // turn — the agent should keep its work in service of them.
+  const objectives = await getObjectives(project);
+  const objectivesBlock = objectives ? objectivesDigest(objectives) : "";
+
+  const volatileBlock = [objectivesBlock, engagementBlock, assembled.volatileBlock].filter(Boolean).join("\n\n");
 
   // Break the input prompt into parts for the composition bar.
   const priorHistory = history.slice(0, -1).map((m) => m.content).join("\n");
@@ -99,6 +108,7 @@ export async function POST(req: Request) {
     { label: "Persona", tokens: estimateTokens(agent.systemPrompt), tier: "cached" },
     { label: "Tool schemas", tokens: estimateTokens(JSON.stringify(agentTools)), tier: "cached" },
     { label: "Stable memory", tokens: estimateTokens(assembled.stableBlock), tier: "cached" },
+    { label: "Objectives", tokens: estimateTokens(objectivesBlock), tier: "volatile" },
     { label: "Engagement constraints", tokens: estimateTokens(engagementBlock), tier: "volatile" },
     { label: "Ranked memory", tokens: estimateTokens(assembled.rankedBlock), tier: "volatile" },
     { label: "Working context", tokens: estimateTokens(workingContext), tier: "volatile" },
@@ -144,6 +154,7 @@ export async function POST(req: Request) {
             volatileBlock,
             agent: { systemPrompt: agent.systemPrompt, model: agent.model, toolNames: agent.tools },
             subagents,
+            webSearch,
           },
           (ev: AgentEvent) => send(ev)
         );

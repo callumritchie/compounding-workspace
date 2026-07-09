@@ -284,6 +284,13 @@ html, body {
 .theme-card.mine { border-left: 3px solid var(--accent, #6b7cff); }
 .for-you { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; color: var(--accent, #6b7cff); border: 1px solid currentColor; border-radius: 4px; padding: 1px 5px; }
 /* ---- Signal inbox cards ---- */
+/* Triage buckets: a light header groups the feed into risks / opportunities / FYI
+   so it's scannable instead of one long list. */
+.signal-bucket { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.signal-bucket-head { font-size: 12px; font-weight: 700; color: var(--fg); margin-top: 4px; }
+.signal-bucket-hint { font-weight: 400; color: var(--muted); font-size: 11px; }
+/* "⋯ more" actions row — the do-something-with-it options, tucked below feedback. */
+.signal-more { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
 .signal-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--panel, rgba(0,0,0,0.02)); }
 .signal-card.mine { border-left: 3px solid var(--accent, #6b7cff); }
 .signal-card.alert { border-left: 3px solid #d9534f; }
@@ -317,7 +324,8 @@ html, body {
 .space-abstract { padding: 1px 6px; border-radius: 999px; background: rgba(80,140,255,0.15); color: #3a6; }
 .space-ask { display: flex; flex-direction: column; gap: 8px; }
 .space-ask textarea { width: 100%; min-height: 64px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; }
-.space-ask-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.space-ask-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.space-ask-help { font-size: 12px; color: var(--muted); flex: 1 1 220px; line-height: 1.45; }
 .space-audience { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 .space-answer { border-top: 1px solid var(--border); padding-top: 12px; }
 .space-provenance { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
@@ -387,6 +395,22 @@ html, body {
 @media (prefers-color-scheme: dark) {
   .engagement-strip .eng-item.eng-risk { color: #ff8a80; }
 }
+/* Objectives strip: the signed-off north star, sits above the engagement strip.
+   A touch of accent so it reads as the guiding star, not another constraint. */
+.objectives-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  width: 100%; text-align: left; cursor: pointer;
+  padding: 7px 12px; margin: 0 0 8px; border: 1px solid var(--border); border-radius: 8px;
+  border-left: 3px solid var(--accent, #6b7cff);
+  background: var(--panel, rgba(0,0,0,0.02)); font-size: 12px; color: var(--fg);
+}
+.objectives-strip:hover { border-color: var(--accent, #6b7cff); }
+.objectives-strip .obj-tag { font-weight: 600; opacity: 0.85; }
+.objectives-strip .obj-item {
+  padding: 2px 8px; border-radius: 999px; background: rgba(107,124,255,0.12);
+  white-space: nowrap; max-width: 52ch; overflow: hidden; text-overflow: ellipsis;
+}
+
 .mem-history { margin-top: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel, rgba(0,0,0,0.02)); display: flex; flex-direction: column; gap: 4px; }
 .mem-history-empty { font-size: 12px; color: var(--muted); }
 .mem-history-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
@@ -424,6 +448,13 @@ html, body {
   padding: 0 16px; cursor: pointer; font-weight: 600;
 }
 .composer button:disabled { opacity: 0.5; cursor: default; }
+/* Composer actions column: the web-search toggle sits above the Send button. */
+.composer-actions { display: flex; flex-direction: column; gap: 6px; justify-content: flex-end; }
+.composer-actions button { min-height: 42px; }
+.web-toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); cursor: pointer; white-space: nowrap; user-select: none; }
+.web-toggle.on { color: var(--accent, #6b7cff); font-weight: 600; }
+.web-toggle input { accent-color: var(--accent, #6b7cff); margin: 0; }
+.web-note { padding: 0 14px 10px; font-size: 11px; color: var(--muted); line-height: 1.4; }
 /* Small dismiss "×" used on the kickoff / upload-suggestion cards */
 .ic-x { border: none; background: transparent; cursor: pointer; font-size: 16px; line-height: 1; color: var(--muted); padding: 0 4px; }
 .ic-x:hover { color: var(--ink); }
