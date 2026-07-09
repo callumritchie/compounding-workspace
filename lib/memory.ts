@@ -314,6 +314,27 @@ export async function listAllMemories(): Promise<Memory[]> {
   return rows.map(rowToMemory);
 }
 
+// The Memory-manager view: NOT the whole library, but everything that applies to
+// THIS user in THIS engagement. The scope lattice is the access boundary —
+// personal memory is only ever the current user's, project memory is only the
+// current project's, and the broader tiers (company / sector / client /
+// stakeholder) are those the current project inherits. Reuses scopesFor() so the
+// manager can never expose another person's private notes or another engagement's
+// working memory. Unlike getMemoriesForContext this KEEPS retracted rows (the
+// manager is where you browse + restore archived memory) and does NOT apply the
+// appliesTo filter (a lead curates every in-scope entry, not just the ones that
+// match the current tags this turn).
+export async function listMemoriesForManager(user: string, projectId: string): Promise<Memory[]> {
+  await ensureSeeded();
+  const cfg = await getProjectConfig(projectId);
+  const scopes = scopesFor(user, cfg);
+  const placeholders = scopes.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(`SELECT * FROM memories WHERE scope IN (${placeholders})`)
+    .all(...scopes) as Row[];
+  return rows.map(rowToMemory);
+}
+
 // Outcome-based reinforcement (ticket C3). Importance should move on CORRECTNESS,
 // not usage — so when a recommendation that leaned on a memory is marked as having
 // worked (or not), we adjust the memory here. Worked → importance up (and stamp

@@ -236,7 +236,7 @@ type Nomination = {
 };
 // The "Compass": inferred engagement stage + diverse next-step suggestions + one
 // optional proactive offer (mirrors NextActions in lib/agent).
-type NextAction = { title: string; prompt: string; why: string };
+type NextAction = { title: string; prompt: string; why: string; kind?: "action" | "question" };
 type NextActions = { stage: { label: string; rationale: string }; actions: NextAction[]; offer: NextAction | null };
 // An agent from the roster (the harness config).
 type AgentItem = {
@@ -373,6 +373,8 @@ export default function Home() {
   // Engagement strip: the standing constraints (phase · budget · next milestone ·
   // top risk) shown at the top of the chat column. Loaded from /api/engagement.
   const [engagement, setEngagement] = useState<EngSummary | null>(null);
+  const [objectives, setObjectives] = useState<string[] | null>(null); // the signed-off north star (files/objectives.md)
+  const [webSearch, setWebSearch] = useState(false); // external web search — OFF by default, quarantined when on
   // Navigation altitude: "home" is the hub (your engagements + the cross-project
   // lenses); "project" is inside one engagement (files · chat · history).
   const [view, setView] = useState<"home" | "project" | "space">("home");
@@ -393,6 +395,8 @@ export default function Home() {
   const [inboxSignals, setInboxSignals] = useState<InboxSignal[] | null>(null);
   const [inboxLoading, setInboxLoading] = useState(false);
   const [dismissed, setDismissed] = useState<Record<string, boolean>>({});
+  const [sigFeedback, setSigFeedback] = useState<Record<string, "helpful" | "not-useful">>({}); // per-signal reaction
+  const [sigExpanded, setSigExpanded] = useState<Record<string, boolean>>({}); // "⋯ more" open per signal
   const [readySectors, setReadySectors] = useState<SectorDensity[] | null>(null);
   const briefingUserRef = useRef<string | null>(null);
   // Drafted artifacts, keyed by the signal's insight text (stable across re-sorts).
@@ -401,6 +405,10 @@ export default function Home() {
   // (keyed by a stable id), and whether the whole popup is collapsed.
   const [popupDismissed, setPopupDismissed] = useState<Record<string, boolean>>({});
   const [popupCollapsed, setPopupCollapsed] = useState(false);
+  // Project layout: the Files (left) and Chats (right) columns collapse to slim
+  // rails so the chat can reclaim the width. Per-session, no persistence.
+  const [filesCollapsed, setFilesCollapsed] = useState(false);
+  const [chatsCollapsed, setChatsCollapsed] = useState(false);
 
   // ---- Warm start (cold-start activation) ----
   // On a "cold" project (no memory of its own yet) we proactively show what the
@@ -437,6 +445,7 @@ export default function Home() {
   const [lifecycle, setLifecycle] = useState<{ stale: StaleItem[]; duplicates: DupPair[] }>({ stale: [], duplicates: [] });
   // Guided scenario demo mode.
   const [showScenarios, setShowScenarios] = useState(false);
+  const [showToolsMenu, setShowToolsMenu] = useState(false); // top-bar "⋯ Tools" dropdown
   const [showImpact, setShowImpact] = useState(false);
   const [impact, setImpact] = useState<ImpactStats | null>(null);
   function loadImpact() {
@@ -529,12 +538,14 @@ export default function Home() {
 
   // Load suggested (unsaved) shared memories awaiting approval.
   function loadProposals() {
-    fetch("/api/memory/proposals")
+    fetch(`/api/memory/proposals?user=${encodeURIComponent(user)}&project=${encodeURIComponent(project)}`)
       .then((r) => r.json())
       .then((d) => setProposals(d.proposals ?? []))
       .catch(() => setProposals([]));
   }
-  useEffect(loadProposals, []);
+  // Suggestions are context-scoped, so refresh when the persona or engagement changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(loadProposals, [user, project]);
 
   // Load the Compass (stage + next-best-actions + one proactive offer) for the
   // active chat. Fire-and-forget: the strip keeps showing the last set until this
@@ -557,13 +568,41 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChat, project, user, messages.length, loading]);
 
+  // ---- Bottom-right nudge: the items the agent wants the user to see ----
+  // Built once here so the auto-collapse effect and the popup render agree. The
+  // proactive offer is SUPPRESSED when it just echoes a suggestion chip or the
+  // last reply — the popup should never repeat what's already on screen.
+  const offer = nextActions?.offer ?? null;
+  const offerId = offer ? `offer:${offer.title}` : "";
+  const lastReply = [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
+  const offerEchoes =
+    !!offer &&
+    ((nextActions?.actions ?? []).some((a) => a.prompt === offer.prompt || a.title === offer.title) ||
+      (offer.title.length > 3 && lastReply.toLowerCase().includes(offer.title.toLowerCase())));
+  const showOffer = !!offer && !popupDismissed[offerId] && !offerEchoes;
+  const nudgeItems: Array<
+    | { t: "offer"; id: string; offer: NextAction }
+    | { t: "prop"; id: string; p: Proposal }
+    | { t: "nom"; id: string; n: Nomination }
+  > = [
+    ...(showOffer && offer ? [{ t: "offer" as const, id: offerId, offer }] : []),
+    ...proposals.filter((p) => !popupDismissed[p.id]).map((p) => ({ t: "prop" as const, id: p.id, p })),
+    ...nominations.filter((n) => !popupDismissed[n.id]).map((n) => ({ t: "nom" as const, id: n.id, n })),
+  ];
+  // Auto-collapse when it gets busy (>2 items). Keyed on the COUNT only, so a user
+  // who manually expands isn't re-collapsed until the count actually changes.
+  useEffect(() => {
+    setPopupCollapsed(nudgeItems.length > 2);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nudgeItems.length]);
+
   // Load the engagement constraints strip for the active project. Refetch when the
   // engagement.md editor closes (openFile → null) so edits show immediately.
   useEffect(() => {
     fetch(`/api/engagement?project=${project}`)
       .then((r) => r.json())
-      .then((d) => setEngagement(d.summary ?? null))
-      .catch(() => setEngagement(null));
+      .then((d) => { setEngagement(d.summary ?? null); setObjectives(d.objectives ?? null); })
+      .catch(() => { setEngagement(null); setObjectives(null); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, openFile]);
 
@@ -573,6 +612,13 @@ export default function Home() {
   }, []);
 
   // Navigation: open a project (delivery) / open a lens (intelligence) / go home.
+  // Engagement access = team membership (a lead can open any). This is the client
+  // mirror of the membership rule; the API remains the real gate.
+  function canOpenProject(u: string, projId: string): boolean {
+    if (CLIENT_ROLES[u] === "lead") return true;
+    const p = projects.find((x) => x.id === projId);
+    return (p?.team ?? []).includes(u);
+  }
   function openProject(id: string) {
     setProject(id);
     setSpaceId(null);
@@ -589,18 +635,30 @@ export default function Home() {
   function goHome() {
     setView("home");
   }
-  // Intelligence roles (sales/marketing) don't own delivery — keep them on the hub.
+  // Access follows ENGAGEMENT MEMBERSHIP, not role. After a persona switch, drop
+  // back to the hub only if the open engagement isn't one this person is on (leads
+  // can open any). Sales/marketing added to a project's team can stay in it.
   useEffect(() => {
-    if (!isDeliveryRoleClient(user)) setView("home");
+    if (view === "project" && !canOpenProject(user, project)) setView("home");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   // The route a user personally owns — used to flag "for you" signals on Home.
   const myRoute = CLIENT_ROLES[user] === "sales" ? "sales" : CLIENT_ROLES[user] === "marketing" ? "marketing" : CLIENT_ROLES[user] === "lead" ? "leadership" : "";
 
-  // Proactive Home briefing: for firm-authorised roles, prefetch the prioritized
-  // signal inbox + sector readiness once when they land on Home.
+  // A cross-project answer is framed for an audience. Rather than make the user pick
+  // from an opaque dropdown, default it silently to their own role — they can always
+  // just read the answer. (lead → leadership, analyst → delivery, else the role.)
   useEffect(() => {
-    if (view !== "home" || !canAccessFirmClient(user)) return;
+    const r = CLIENT_ROLES[user];
+    setSpaceAudience(r === "lead" ? "leadership" : r === "analyst" ? "consultant" : r ?? "consultant");
+  }, [user]);
+
+  // Proactive Home briefing: prefetch the prioritized signal inbox + sector
+  // readiness once when anyone lands on Home. The inbox is open to the whole team;
+  // what's inside it is shaped per-family server-side.
+  useEffect(() => {
+    if (view !== "home") return;
     if (briefingUserRef.current === user) return; // already loaded for this persona
     briefingUserRef.current = user;
     setReadySectors(null);
@@ -650,13 +708,7 @@ export default function Home() {
     setMemNote(d?.ok ? `nominated to ${d.targetScope} — review in the Memory manager` : d?.error ?? "nomination failed");
   }
 
-  // ---- Inbox signal actions (draft-in-place / nominate / dismiss) ----
-  function draftLabel(route: string): string {
-    if (route === "marketing") return "✍️ Draft POV";
-    if (route === "sales") return "✍️ Draft pitch outline";
-    if (route === "leadership") return "✍️ Draft brief";
-    return "✍️ Draft practice note";
-  }
+  // ---- Inbox signal actions (feedback-first; draft/flag under "⋯ more") ----
   async function draftSignal(s: InboxSignal) {
     const key = s.id;
     if (signalDrafts[key]?.loading) return;
@@ -702,6 +754,105 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: s.id, status: "dismissed", user }),
     }).catch(() => {});
+  }
+  // Feedback trains the inbox on what's worth surfacing. "Not useful" also clears
+  // the card (a thumbs-down is an implicit dismiss); "helpful" keeps it visible.
+  async function feedbackSignal(s: InboxSignal, reaction: "helpful" | "not-useful") {
+    setSigFeedback((m) => ({ ...m, [s.id]: reaction }));
+    if (reaction === "not-useful") setDismissed((m) => ({ ...m, [s.id]: true }));
+    fetch("/api/signals/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: s.id, family: s.family, reaction, user }),
+    }).catch(() => {});
+  }
+  // Which triage bucket a signal belongs to. Low-confidence intel always drops to
+  // FYI; otherwise delivery/retention risks vs. growth opportunities vs. the rest.
+  function signalBucket(s: InboxSignal): "risk" | "opp" | "fyi" {
+    if (s.soft) return "fyi";
+    if (["churn", "early-warning", "delivery-health"].includes(s.family)) return "risk";
+    if (["buying", "competitive", "new-service-line"].includes(s.family)) return "opp";
+    return "fyi";
+  }
+  // Not every worthwhile signal is a pitch — some just need a conversation inside
+  // the team. A lightweight "flag" marks it actioned and acknowledges, no artifact.
+  async function flagInternal(s: InboxSignal) {
+    setMemNote(`flagged “${s.title}” for internal discussion`);
+    fetch("/api/signals/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: s.id, status: "actioned", user }),
+    }).catch(() => {});
+  }
+  // One signal card. Feedback-first: the headline actions are 👍 / 👎 / Dismiss
+  // (which teach the inbox what's worth surfacing); doing something with it —
+  // drafting, flagging internally, proposing a firm lesson — lives under "⋯ more"
+  // so the card never presumes a pitch is the next step.
+  function renderSignalCard(s: InboxSignal) {
+    const fm = familyMeta(s.family);
+    const mine = s.route === myRoute;
+    const draft = signalDrafts[s.id];
+    const fb = sigFeedback[s.id];
+    const expanded = sigExpanded[s.id];
+    const alert = signalBucket(s) === "risk";
+    return (
+      <div key={s.id} className={`signal-card ${mine ? "mine" : ""} ${alert ? "alert" : ""}`}>
+        <div className="signal-top">
+          <span className="sig-family">{fm.icon} {fm.label}</span>
+          {mine && <span className="for-you">for you</span>}
+          {s.soft && <span className="sig-soft" title="low-confidence intel — review before acting">needs review</span>}
+          {s.deIdentified && <span className="space-abstract" title="combined across several clients, with client names removed">🛡 anonymised</span>}
+          <span className="sig-meta">{s.ageDays != null ? `${ageLabel(s.ageDays)} · ` : ""}conf {Math.round(s.confidence * 100)}%</span>
+        </div>
+        <div className="signal-title">{s.title}</div>
+        <div className="signal-detail">{s.detail}</div>
+        {s.evidence[0] && <div className="signal-evidence">“{s.evidence[0]}”</div>}
+        <div className="signal-foot">
+          {s.support?.sectors && <span className="theme-sectors">{s.support.sectors.join(" · ")}</span>}
+          <div className="theme-actions">
+            <button className={`mini ${fb === "helpful" ? "primary" : ""}`} onClick={() => feedbackSignal(s, "helpful")} title="worth surfacing — teaches the inbox to keep signals like this">👍 Helpful</button>
+            <button className="mini" onClick={() => feedbackSignal(s, "not-useful")} title="not worth surfacing — teaches the inbox and clears it">👎 Not useful</button>
+            <button className="mini" onClick={() => dismissSignal(s)} title="clear from your inbox">Dismiss</button>
+            <button className="mini" onClick={() => setSigExpanded((m) => ({ ...m, [s.id]: !m[s.id] }))} title="do something with this signal">⋯ more</button>
+          </div>
+        </div>
+        {expanded && (
+          <div className="signal-more">
+            {s.actions.draft && (
+              <button className="mini" onClick={() => draftSignal(s)} disabled={draft?.loading} title="draft a note / POV from this signal, in place">
+                {draft?.loading ? "Drafting…" : "✍️ Draft a note"}
+              </button>
+            )}
+            <button className="mini" onClick={() => flagInternal(s)} title="raise this with the team — no artifact">🗣 Flag for internal discussion</button>
+            {s.actions.nominate && (
+              <button className="mini" onClick={() => nominateSignal(s)} title="propose as a reusable firm lesson (enters the review pipeline)">Propose as firm lesson</button>
+            )}
+          </div>
+        )}
+        {draft && !draft.loading && (
+          <div className="signal-draft">
+            {draft.error ? (
+              <div className="hint">⚠️ {draft.error}</div>
+            ) : (
+              <>
+                <div className="signal-draft-head">
+                  <span className="signal-draft-kind">{draft.kind}</span>
+                  <span className="signal-draft-title">{draft.title}</span>
+                  <div className="signal-draft-btns">
+                    <button className="mini" onClick={() => navigator.clipboard?.writeText(draft.body ?? "")}>Copy</button>
+                    <button className="mini" onClick={() => saveAsset(s)} disabled={!!draft.saved}>{draft.saved ? "Saved ✓" : "Save to library"}</button>
+                  </div>
+                </div>
+                <div className="markdown signal-draft-body">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{draft.body ?? ""}</ReactMarkdown>
+                </div>
+                {draft.saved && <div className="hint">saved to workspace/{draft.saved}</div>}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
   }
   // Family → badge label + emoji.
   function familyMeta(family: string): { icon: string; label: string } {
@@ -755,6 +906,16 @@ export default function Home() {
     }
   }
 
+  // One "surface what we might be missing" action behind a single button: spot
+  // follow-on / offering opportunities, and — on the firm-wide lens — also
+  // triangulate emergent patterns (weak in any one engagement, strong across many).
+  // Collapses the old ✨ Spot / 🔺 Triangulate pair into one legible control.
+  async function surfaceMissing() {
+    if (oppLoading || themesLoading) return;
+    await spotSpaceOpportunities();
+    if (activeSpace?.type === "firm") await runTriangulate();
+  }
+
   // Ask a cross-project question of the active space (coarse→fine→map→reduce on the
   // server). Non-streaming: it's a synthesis over many engagements, not a chat turn.
   async function runSpaceQuery() {
@@ -782,6 +943,14 @@ export default function Home() {
     setCompassDismissed(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChat, project]);
+
+  // Memory is scoped to WHO you are and WHERE you are, so re-fetch it whenever the
+  // persona or engagement changes — otherwise the manager would show the previous
+  // user's personal notes or the previous project's working memory.
+  useEffect(() => {
+    loadMemories();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, project]);
 
   // Open the Memory manager on its Pending tab — the full workbench for the richer
   // promote / generalise flow the popup links out to.
@@ -932,7 +1101,7 @@ export default function Home() {
 
   // ---- Memory manager: load + edit the whole library ----
   function loadMemories() {
-    fetch("/api/memory/list")
+    fetch(`/api/memory/list?user=${encodeURIComponent(user)}&project=${encodeURIComponent(project)}`)
       .then((r) => r.json())
       .then((d) => {
         const mems: MemItem[] = d.memories ?? [];
@@ -1291,7 +1460,7 @@ export default function Home() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user, message: text, project, openFile, recentActions, chatId: activeChat }),
+        body: JSON.stringify({ user, message: text, project, openFile, recentActions, chatId: activeChat, webSearch }),
       });
       if (!res.body) throw new Error("no response stream");
 
@@ -1402,23 +1571,14 @@ export default function Home() {
               placeholder="Ask across these engagements… e.g. 'Where does convenience-driven pricing let us down, and what should we pitch instead?'"
             />
             <div className="space-ask-row">
-              <label className="space-audience">
-                for
-                <select value={spaceAudience} onChange={(e) => setSpaceAudience(e.target.value)}>
-                  <option value="consultant">delivery</option>
-                  <option value="sales">sales / BD</option>
-                  <option value="marketing">marketing</option>
-                  <option value="leadership">leadership</option>
-                </select>
-              </label>
+              <div className="space-ask-help">
+                <b>Ask</b> answers a specific question across these engagements.{" "}
+                <b>Surface what we might be missing</b> proactively looks for follow-on work and offerings
+                {activeSpace?.type === "firm" ? ", plus patterns weak in any one engagement but strong across many." : " across the account."}
+              </div>
               <div className="space-ask-btns">
-                {activeSpace?.type === "firm" && (
-                  <button className="mini" onClick={runTriangulate} disabled={themesLoading} title="find emergent themes — weak in one engagement, strong across many">
-                    {themesLoading ? "Triangulating…" : "🔺 Triangulate"}
-                  </button>
-                )}
-                <button className="mini" onClick={spotSpaceOpportunities} disabled={oppLoading} title="proactively surface follow-on / offering / BD opportunities">
-                  {oppLoading ? "Spotting…" : "✨ Spot opportunities"}
+                <button className="mini" onClick={surfaceMissing} disabled={oppLoading || themesLoading} title="proactively surface opportunities — and, firm-wide, emergent patterns — we might have missed">
+                  {oppLoading || themesLoading ? "Surfacing…" : "🔍 Surface what we might be missing"}
                 </button>
                 <button onClick={runSpaceQuery} disabled={spaceLoading || !spaceQuery.trim()}>
                   {spaceLoading ? "Synthesising…" : "Ask across projects"}
@@ -1521,21 +1681,38 @@ export default function Home() {
           </span>
         )}
         <div className="topbar-right">
-          {view === "project" && (
-            <>
-              <button className="queue-btn scenarios-btn" onClick={() => setShowScenarios(true)}>✨ Scenarios</button>
-              <button className="queue-btn" onClick={() => { loadAgents(); setShowAgents(true); }}>🤖 Agents</button>
-            </>
-          )}
-          <button
-            className="queue-btn"
-            onClick={() => { loadMemories(); loadProposals(); loadPromotions(); loadSignals(); loadLifecycle(); runMaintain(); setShowMemory(true); }}
-          >
-            🧠 Memory{proposals.length + nominations.length ? ` (${proposals.length + nominations.length})` : ""}
-          </button>
-          <button className="queue-btn" onClick={() => { loadImpact(); setShowImpact(true); }} title="how much firm knowledge is being reused across engagements">
-            📈 Impact
-          </button>
+          {/* One "Tools" menu holds Scenarios / Agents / Memory / Impact so the top
+              bar stays quiet. Pending-approval count rides the trigger so it's not lost. */}
+          {(() => {
+            const pending = proposals.length + nominations.length;
+            return (
+              <div className="tools">
+                <button className="queue-btn tools-trigger" onClick={() => setShowToolsMenu((v) => !v)} title="Workspace tools">
+                  ⋯ Tools
+                  {pending > 0 && <span className="tools-badge">{pending}</span>}
+                </button>
+                {showToolsMenu && (
+                  <>
+                    <div className="menu-overlay" onClick={() => setShowToolsMenu(false)} />
+                    <div className="tools-menu">
+                      {view === "project" && (
+                        <>
+                          <button onClick={() => { setShowToolsMenu(false); setShowScenarios(true); }}>✨ Scenarios</button>
+                          <button onClick={() => { setShowToolsMenu(false); loadAgents(); setShowAgents(true); }}>🤖 Agents</button>
+                        </>
+                      )}
+                      <button onClick={() => { setShowToolsMenu(false); loadMemories(); loadProposals(); loadPromotions(); loadSignals(); loadLifecycle(); runMaintain(); setShowMemory(true); }}>
+                        🧠 Memory{pending ? <span className="tools-badge inline">{pending}</span> : null}
+                      </button>
+                      <button onClick={() => { setShowToolsMenu(false); loadImpact(); setShowImpact(true); }} title="how much firm knowledge is being reused across engagements">
+                        📈 Impact
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })()}
           <div className="user-switch">
             <span className="subtitle">You are:</span>
             <select className="user-select" value={user} onChange={(e) => setUser(e.target.value as User)} title="switch persona">
@@ -1557,7 +1734,7 @@ export default function Home() {
             </div>
           </div>
 
-          {isDeliveryRoleClient(user) && (
+          {myProjects.length > 0 && (
             <section className="home-section">
               <div className="home-section-head">
                 <h3>Your engagements</h3>
@@ -1600,7 +1777,7 @@ export default function Home() {
             </section>
           )}
 
-          {canAccessFirmClient(user) && (
+          {(inboxLoading || inboxSignals !== null) && (
             <section className="home-section home-briefing">
               <div className="home-section-head">
                 <h3>🔔 Signal inbox</h3>
@@ -1622,62 +1799,29 @@ export default function Home() {
                   <div className="hint">No open signals right now — you&apos;re clear.</div>
                 )}
                 {memNote && <div className="hint briefing-note">{memNote}</div>}
-                {(inboxSignals ?? []).filter((s) => !dismissed[s.id]).map((s) => {
-                  const fm = familyMeta(s.family);
-                  const mine = s.route === myRoute;
-                  const draft = signalDrafts[s.id];
-                  const alert = ["churn", "early-warning", "delivery-health"].includes(s.family);
-                  return (
-                    <div key={s.id} className={`signal-card ${mine ? "mine" : ""} ${alert ? "alert" : ""}`}>
-                      <div className="signal-top">
-                        <span className={`sig-family fam-${s.family}`}>{fm.icon} {fm.label}</span>
-                        {mine && <span className="for-you">for you</span>}
-                        {s.soft && <span className="sig-soft" title="low-confidence intel — review before acting">needs review</span>}
-                        {s.deIdentified && <span className="space-abstract" title="aggregated across clients — de-identified">🛡 de-identified</span>}
-                        <span className="sig-meta">{s.ageDays != null ? `${ageLabel(s.ageDays)} · ` : ""}conf {Math.round(s.confidence * 100)}%</span>
-                      </div>
-                      <div className="signal-title">{s.title}</div>
-                      <div className="signal-detail">{s.detail}</div>
-                      {s.evidence[0] && <div className="signal-evidence">“{s.evidence[0]}”</div>}
-                      <div className="signal-foot">
-                        {s.support?.sectors && <span className="theme-sectors">{s.support.sectors.join(" · ")}</span>}
-                        <div className="theme-actions">
-                          {s.actions.draft && (
-                            <button className="mini primary" onClick={() => draftSignal(s)} disabled={draft?.loading} title="draft the artifact from this signal, in place">
-                              {draft?.loading ? "Drafting…" : draftLabel(s.route)}
-                            </button>
-                          )}
-                          {s.actions.nominate && (
-                            <button className="mini" onClick={() => nominateSignal(s)} title="propose as firm knowledge (enters the review pipeline)">Nominate</button>
-                          )}
-                          <button className="mini" onClick={() => dismissSignal(s)} title="clear from your inbox">Dismiss</button>
+                {(() => {
+                  // Break the feed into a few triage buckets so it's scannable —
+                  // risks first, then opportunities, then lower-signal FYIs — each
+                  // still score-sorted within the bucket.
+                  const open = (inboxSignals ?? []).filter((s) => !dismissed[s.id]);
+                  const buckets: { key: "risk" | "opp" | "fyi"; label: string; hint: string }[] = [
+                    { key: "risk", label: "⚠ Risks to act on", hint: "delivery, retention & early-warning" },
+                    { key: "opp", label: "✨ Opportunities", hint: "buying, competitive & new service lines" },
+                    { key: "fyi", label: "FYI / needs review", hint: "lower-confidence intel & reference" },
+                  ];
+                  return buckets.map((b) => {
+                    const items = open.filter((s) => signalBucket(s) === b.key);
+                    if (!items.length) return null;
+                    return (
+                      <div key={b.key} className="signal-bucket">
+                        <div className="signal-bucket-head">
+                          {b.label} <span className="signal-bucket-hint">{b.hint}</span>
                         </div>
+                        {items.map(renderSignalCard)}
                       </div>
-                      {draft && !draft.loading && (
-                        <div className="signal-draft">
-                          {draft.error ? (
-                            <div className="hint">⚠️ {draft.error}</div>
-                          ) : (
-                            <>
-                              <div className="signal-draft-head">
-                                <span className="signal-draft-kind">{draft.kind}</span>
-                                <span className="signal-draft-title">{draft.title}</span>
-                                <div className="signal-draft-btns">
-                                  <button className="mini" onClick={() => navigator.clipboard?.writeText(draft.body ?? "")}>Copy</button>
-                                  <button className="mini" onClick={() => saveAsset(s)} disabled={!!draft.saved}>{draft.saved ? "Saved ✓" : "Save to library"}</button>
-                                </div>
-                              </div>
-                              <div className="markdown signal-draft-body">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{draft.body ?? ""}</ReactMarkdown>
-                              </div>
-                              {draft.saved && <div className="hint">saved to workspace/{draft.saved}</div>}
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                    );
+                  });
+                })()}
               </div>
             </section>
           )}
@@ -1707,33 +1851,54 @@ export default function Home() {
 
       {/* ---- Project workspace: three panels ---- */}
       {view === "project" && (
-      <div className="panels">
-        {/* Left: Files (shared) */}
-        <div className="panel">
-          <div className="panel-header">Files · shared corpus</div>
-          <div className="panel-body">
-            <label className="upload">
-              {uploading ? "Uploading…" : "+ Upload PDF / text"}
-              <input type="file" accept=".pdf,.txt,.md" onChange={handleUpload} hidden disabled={uploading} />
-            </label>
-            {files.length === 0 && <div className="empty">No files yet.</div>}
-            {files.map((f) => (
-              <div key={f} className={`file ${openFile === f ? "active" : ""}`} onClick={() => openFileFn(f)}>
-                {f}
-              </div>
-            ))}
-
-            {openFile && (
-              <div className="viewer">
-                <header>
-                  <span>OPEN · {openFile}</span>
-                  <button title="close" onClick={() => { setOpenFile(null); setOpenContent(""); }}>×</button>
-                </header>
-                <pre>{openContent}</pre>
-              </div>
-            )}
+      <div
+        className="panels"
+        style={{
+          gridTemplateColumns: [
+            filesCollapsed ? "40px" : "240px",
+            openFile ? "minmax(300px, 360px)" : null,
+            "1fr",
+            chatsCollapsed ? "40px" : "300px",
+          ].filter(Boolean).join(" "),
+        }}
+      >
+        {/* Left: Files (shared) — collapses to a slim rail */}
+        {filesCollapsed ? (
+          <div className="panel rail" onClick={() => setFilesCollapsed(false)} title="Show files">
+            <button className="panel-collapse" title="Show files">›</button>
+            <span className="rail-label">Files{files.length ? ` · ${files.length}` : ""}</span>
           </div>
-        </div>
+        ) : (
+          <div className="panel">
+            <div className="panel-header">
+              <span>Files · shared corpus</span>
+              <button className="panel-collapse" title="Collapse files" onClick={() => setFilesCollapsed(true)}>‹</button>
+            </div>
+            <div className="panel-body">
+              <label className="upload">
+                {uploading ? "Uploading…" : "+ Upload PDF / text"}
+                <input type="file" accept=".pdf,.txt,.md" onChange={handleUpload} hidden disabled={uploading} />
+              </label>
+              {files.length === 0 && <div className="empty">No files yet.</div>}
+              {files.map((f) => (
+                <div key={f} className={`file ${openFile === f ? "active" : ""}`} onClick={() => openFileFn(f)}>
+                  {f}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* File viewer: its own drawer column between Files and Chat, only when a file is open */}
+        {openFile && (
+          <div className="panel file-drawer">
+            <div className="panel-header">
+              <span className="file-drawer-name" title={openFile}>{openFile.split("/").pop()}</span>
+              <button className="panel-collapse" title="Close file" onClick={() => { setOpenFile(null); setOpenContent(""); }}>×</button>
+            </div>
+            <pre className="file-drawer-body">{openContent}</pre>
+          </div>
+        )}
 
         {/* Centre: Chat */}
         <div className="panel">
@@ -1755,6 +1920,20 @@ export default function Home() {
             )}
           </div>
           <div className="chat">
+            {/* Objectives strip: the signed-off north star, always visible above the
+                constraints. Click to open objectives.md. */}
+            {objectives && objectives.length > 0 && (
+              <button
+                className="objectives-strip"
+                title={`Open the engagement objectives\n\n• ${objectives.join("\n• ")}`}
+                onClick={() => openFileFn("objectives.md")}
+              >
+                <span className="obj-tag">🎯 Objectives</span>
+                {objectives.map((o, i) => (
+                  <span key={i} className="obj-item">{o.length > 52 ? o.slice(0, 52) + "…" : o}</span>
+                ))}
+              </button>
+            )}
             {/* Engagement strip: the standing constraints frame, always visible.
                 Click to open engagement.md and edit the underlying constraints. */}
             {engagement && (
@@ -1978,12 +2157,12 @@ export default function Home() {
                     {nextActions.actions.map((a, i) => (
                       <button
                         key={i}
-                        className="guide-send compass-chip"
+                        className={`guide-send compass-chip ${a.kind === "question" ? "question" : "action"}`}
                         disabled={loading || !activeChat}
                         title={a.why ? `Why: ${a.why}` : undefined}
                         onClick={() => sendText(a.prompt)}
                       >
-                        ▸ {a.title}
+                        {a.kind === "question" ? "❓" : "▸"} {a.title}
                       </button>
                     ))}
                   </div>
@@ -1997,15 +2176,37 @@ export default function Home() {
                 onKeyDown={onKeyDown}
                 placeholder="Ask the agent… (Enter to send, Shift+Enter for a new line)"
               />
-              <button onClick={send} disabled={loading || !input.trim()}>Send</button>
+              <div className="composer-actions">
+                <label
+                  className={`web-toggle ${webSearch ? "on" : ""}`}
+                  title="Off by default. When on, the agent may search the WEB for external context (client/sector background, methodology) — it announces each search, labels results 🌐 EXTERNAL, and never saves them to the corpus or memory."
+                >
+                  <input type="checkbox" checked={webSearch} onChange={(e) => setWebSearch(e.target.checked)} />
+                  🌐 Web search {webSearch ? "on" : "off"}
+                </label>
+                <button onClick={send} disabled={loading || !input.trim()}>Send</button>
+              </div>
             </div>
+            {webSearch && (
+              <div className="web-note">
+                External web search is <b>on</b>. The agent will say what it&apos;s looking up, mark results 🌐 EXTERNAL, and never fold them into the project&apos;s research, corpus, or memory.
+              </div>
+            )}
           </div>
         </div>
 
         {/* Right: Chats — the user's conversation history (click an answer's ▸ x-ray for what informed it) */}
+        {chatsCollapsed ? (
+          <div className="panel rail" onClick={() => setChatsCollapsed(false)} title="Show chat history">
+            <button className="panel-collapse" title="Show chat history">‹</button>
+            <button className="rail-new" title="New chat" onClick={(e) => { e.stopPropagation(); newChat(); }}>＋</button>
+            <span className="rail-label">Chats{chats.length ? ` · ${chats.length}` : ""}</span>
+          </div>
+        ) : (
         <div className="panel">
           <div className="panel-header">
-            Chats · {user} · <span className="hdr-project">{projects.find((p) => p.id === project)?.name ?? project}</span>
+            <span>Chats · {user} · <span className="hdr-project">{projects.find((p) => p.id === project)?.name ?? project}</span></span>
+            <button className="panel-collapse" title="Collapse chat history" onClick={() => setChatsCollapsed(true)}>›</button>
           </div>
           <div className="panel-body">
             <button className="new-chat" onClick={newChat}>＋ New chat</button>
@@ -2033,6 +2234,7 @@ export default function Home() {
             )}
           </div>
         </div>
+        )}
       </div>
       )}
 
@@ -2041,15 +2243,13 @@ export default function Home() {
           the Memory manager) + at most ONE proactive offer. A corner toast: it
           never interrupts typing, and every item is dismissible. */}
       {(() => {
-        const offer = nextActions?.offer ?? null;
-        const offerId = offer ? `offer:${offer.title}` : "";
-        const showOffer = !!offer && !popupDismissed[offerId];
-        const props = proposals.filter((p) => !popupDismissed[p.id]);
-        const noms = nominations.filter((n) => !popupDismissed[n.id]);
-        const count = (showOffer ? 1 : 0) + props.length + noms.length;
+        const count = nudgeItems.length;
         // Hide during a guided scenario — the scenario guide owns the bottom-right —
         // and off the Home/lens screens (the popup is delivery, project-scoped).
         if (count === 0 || activeScenario || view !== "project") return null;
+        const CAP = 3;
+        const shown = nudgeItems.slice(0, CAP);
+        const hidden = count - shown.length;
         return (
           <div className="nudge">
             <div className="nudge-head">
@@ -2060,49 +2260,63 @@ export default function Home() {
             </div>
             {!popupCollapsed && (
               <div className="nudge-body">
-                {showOffer && offer && (
-                  <div className="nudge-item offer">
-                    <div className="nudge-kind">💡 I can do this now</div>
-                    <div className="nudge-title">{offer.title}</div>
-                    {offer.why && <div className="nudge-why">{offer.why}</div>}
-                    <div className="nudge-actions">
-                      <button
-                        className="promote"
-                        disabled={loading || !activeChat}
-                        onClick={() => { setPopupDismissed((s) => ({ ...s, [offerId]: true })); sendText(offer.prompt); }}
-                      >
-                        Do it
-                      </button>
-                      <button className="ghost" onClick={() => setPopupDismissed((s) => ({ ...s, [offerId]: true }))}>Not now</button>
+                {shown.map((it) => {
+                  if (it.t === "offer") {
+                    const offer = it.offer;
+                    return (
+                      <div key={it.id} className="nudge-item offer">
+                        <div className="nudge-kind">💡 I can do this now</div>
+                        <div className="nudge-title">{offer.title}</div>
+                        {offer.why && <div className="nudge-why">{offer.why}</div>}
+                        <div className="nudge-actions">
+                          <button
+                            className="promote"
+                            disabled={loading || !activeChat}
+                            onClick={() => { setPopupDismissed((s) => ({ ...s, [it.id]: true })); sendText(offer.prompt); }}
+                          >
+                            Do it
+                          </button>
+                          <button className="ghost" onClick={() => setPopupDismissed((s) => ({ ...s, [it.id]: true }))}>Not now</button>
+                        </div>
+                      </div>
+                    );
+                  }
+                  if (it.t === "prop") {
+                    const p = it.p;
+                    return (
+                      <div key={it.id} className="nudge-item">
+                        <div className="nudge-kind">💡 Save to the team’s memory?</div>
+                        <div className="nudge-title">“{p.fact}”</div>
+                        <div className="nudge-why">{p.scope} · suggested by {p.proposedBy}</div>
+                        <div className="nudge-actions">
+                          {canApproveScope(user, p.scope) ? (
+                            <button className="promote" onClick={() => { approveProp(p.id); setPopupDismissed((s) => ({ ...s, [p.id]: true })); }}>Approve</button>
+                          ) : (
+                            <span className="lock-note">🔒 needs a Lead</span>
+                          )}
+                          <button className="ghost" onClick={() => { dismissProp(p.id); setPopupDismissed((s) => ({ ...s, [p.id]: true })); }}>Dismiss</button>
+                        </div>
+                      </div>
+                    );
+                  }
+                  const n = it.n;
+                  return (
+                    <div key={it.id} className="nudge-item">
+                      <div className="nudge-kind">⬆ Promote a lesson?</div>
+                      <div className="nudge-title">“{n.fact}”</div>
+                      <div className="nudge-why">to {n.targetScope} · needs generalising first</div>
+                      <div className="nudge-actions">
+                        <button className="promote" onClick={openPending}>Review</button>
+                        <button className="ghost" onClick={() => setPopupDismissed((s) => ({ ...s, [n.id]: true }))}>Later</button>
+                      </div>
                     </div>
-                  </div>
+                  );
+                })}
+                {hidden > 0 && (
+                  <button className="nudge-more" onClick={openPending}>
+                    +{hidden} more in 🧠 Memory
+                  </button>
                 )}
-                {props.map((p) => (
-                  <div key={p.id} className="nudge-item">
-                    <div className="nudge-kind">💡 Save to the team’s memory?</div>
-                    <div className="nudge-title">“{p.fact}”</div>
-                    <div className="nudge-why">{p.scope} · suggested by {p.proposedBy}</div>
-                    <div className="nudge-actions">
-                      {canApproveScope(user, p.scope) ? (
-                        <button className="promote" onClick={() => { approveProp(p.id); setPopupDismissed((s) => ({ ...s, [p.id]: true })); }}>Approve</button>
-                      ) : (
-                        <span className="lock-note">🔒 needs a Lead</span>
-                      )}
-                      <button className="ghost" onClick={() => { dismissProp(p.id); setPopupDismissed((s) => ({ ...s, [p.id]: true })); }}>Dismiss</button>
-                    </div>
-                  </div>
-                ))}
-                {noms.map((n) => (
-                  <div key={n.id} className="nudge-item">
-                    <div className="nudge-kind">⬆ Promote a lesson?</div>
-                    <div className="nudge-title">“{n.fact}”</div>
-                    <div className="nudge-why">to {n.targetScope} · needs generalising first</div>
-                    <div className="nudge-actions">
-                      <button className="promote" onClick={openPending}>Review</button>
-                      <button className="ghost" onClick={() => setPopupDismissed((s) => ({ ...s, [n.id]: true }))}>Later</button>
-                    </div>
-                  </div>
-                ))}
               </div>
             )}
           </div>
@@ -2338,10 +2552,15 @@ export default function Home() {
               {memView === "library" && (
               <>
               <div className="empty">
-                Every memory, grouped by where it lives on the scope lattice — broad (whole firm) at the top,
-                specific (one person) at the bottom. Levels start collapsed — click one to browse it, or search
-                to jump straight to matches. A message&apos;s ▸ x-ray shows the subset injected that turn; this is
-                where you curate the whole library. Editing here changes the file on disk.
+                Showing memory for <b>{USER_NAMES[user] ?? user}</b> in{" "}
+                <b>{projects.find((p) => p.id === project)?.name ?? project}</b> — your own personal notes, this
+                engagement&apos;s memory, and the broader company / sector / client tiers it inherits. Another
+                person&apos;s personal notes and other engagements&apos; memory stay out of view.
+                <br />
+                Grouped by where it lives on the scope lattice — broad (whole firm) at the top, specific (one
+                person) at the bottom. Levels start collapsed — click one to browse it, or search to jump straight
+                to matches. A message&apos;s ▸ x-ray shows the subset injected that turn. Editing here changes the
+                file on disk.
                 <br />
                 <b>Priority</b> sets how strongly the agent leans on a memory when space is tight. <b>Archive</b>{" "}
                 pauses one (reversible); <b>Delete</b> removes it for good.

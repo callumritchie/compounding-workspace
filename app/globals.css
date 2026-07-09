@@ -60,6 +60,9 @@ html, body {
 }
 .panel:last-child { border-right: none; }
 .panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 10px 14px;
   font-size: 12px;
   font-weight: 600;
@@ -69,6 +72,39 @@ html, body {
   border-bottom: 1px solid var(--border);
 }
 .panel-body { flex: 1; overflow-y: auto; padding: 12px 14px; }
+
+/* Collapse toggle in a panel header — pushed to the right edge */
+.panel-collapse {
+  margin-left: auto; border: none; background: transparent; cursor: pointer;
+  color: var(--muted); font-size: 15px; line-height: 1; padding: 0 2px; flex-shrink: 0;
+}
+.panel-collapse:hover { color: var(--accent); }
+
+/* Slim rail: a collapsed Files / Chats column */
+.panel.rail {
+  align-items: center; gap: 10px; padding: 10px 0; cursor: pointer;
+}
+.panel.rail:hover { background: var(--bg); }
+.panel.rail .panel-collapse { margin-left: 0; }
+.panel.rail .rail-new {
+  border: 1px solid var(--border); background: var(--panel); color: var(--ink);
+  border-radius: 6px; width: 24px; height: 24px; cursor: pointer; font-size: 14px; line-height: 1;
+}
+.panel.rail .rail-new:hover { border-color: var(--accent); color: var(--accent); }
+.rail-label {
+  writing-mode: vertical-rl; text-orientation: mixed; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); white-space: nowrap;
+}
+
+/* File viewer drawer — its own column between Files and Chat */
+.file-drawer .file-drawer-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: none;
+}
+.file-drawer-body {
+  flex: 1; margin: 0; padding: 12px 14px; overflow: auto;
+  font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 
 .topbar-right { display: flex; align-items: center; gap: 14px; }
 .project-select {
@@ -80,6 +116,29 @@ html, body {
   border-radius: 999px; padding: 4px 12px; cursor: pointer; font-size: 13px; font-weight: 600;
 }
 .queue-btn:hover { background: var(--accent); color: #fff; }
+
+/* ---- Top-bar "Tools" dropdown ---- */
+.tools { position: relative; }
+.tools-trigger { display: inline-flex; align-items: center; gap: 6px; }
+.tools-badge {
+  background: var(--accent); color: #fff; border-radius: 999px; font-size: 11px;
+  font-weight: 700; min-width: 18px; padding: 0 5px; line-height: 18px; text-align: center;
+}
+.tools-badge.inline { margin-left: 6px; }
+.tools-trigger:hover .tools-badge { background: #fff; color: var(--accent); }
+.menu-overlay { position: fixed; inset: 0; z-index: 40; background: transparent; }
+.tools-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 41;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.18); padding: 6px; min-width: 180px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.tools-menu button {
+  display: flex; align-items: center; width: 100%; text-align: left; border: none;
+  background: transparent; color: var(--ink); border-radius: 7px; padding: 8px 10px;
+  cursor: pointer; font-size: 13px; font-weight: 500;
+}
+.tools-menu button:hover { background: var(--bg); }
 
 /* ---- Modal (promotion review queue) ---- */
 .modal-overlay {
@@ -284,6 +343,13 @@ html, body {
 .theme-card.mine { border-left: 3px solid var(--accent, #6b7cff); }
 .for-you { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; color: var(--accent, #6b7cff); border: 1px solid currentColor; border-radius: 4px; padding: 1px 5px; }
 /* ---- Signal inbox cards ---- */
+/* Triage buckets: a light header groups the feed into risks / opportunities / FYI
+   so it's scannable instead of one long list. */
+.signal-bucket { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.signal-bucket-head { font-size: 12px; font-weight: 700; color: var(--fg); margin-top: 4px; }
+.signal-bucket-hint { font-weight: 400; color: var(--muted); font-size: 11px; }
+/* "⋯ more" actions row — the do-something-with-it options, tucked below feedback. */
+.signal-more { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
 .signal-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--panel, rgba(0,0,0,0.02)); }
 .signal-card.mine { border-left: 3px solid var(--accent, #6b7cff); }
 .signal-card.alert { border-left: 3px solid #d9534f; }
@@ -317,7 +383,8 @@ html, body {
 .space-abstract { padding: 1px 6px; border-radius: 999px; background: rgba(80,140,255,0.15); color: #3a6; }
 .space-ask { display: flex; flex-direction: column; gap: 8px; }
 .space-ask textarea { width: 100%; min-height: 64px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; }
-.space-ask-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.space-ask-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.space-ask-help { font-size: 12px; color: var(--muted); flex: 1 1 220px; line-height: 1.45; }
 .space-audience { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 .space-answer { border-top: 1px solid var(--border); padding-top: 12px; }
 .space-provenance { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
@@ -387,6 +454,22 @@ html, body {
 @media (prefers-color-scheme: dark) {
   .engagement-strip .eng-item.eng-risk { color: #ff8a80; }
 }
+/* Objectives strip: the signed-off north star, sits above the engagement strip.
+   A touch of accent so it reads as the guiding star, not another constraint. */
+.objectives-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  width: 100%; text-align: left; cursor: pointer;
+  padding: 7px 12px; margin: 0 0 8px; border: 1px solid var(--border); border-radius: 8px;
+  border-left: 3px solid var(--accent, #6b7cff);
+  background: var(--panel, rgba(0,0,0,0.02)); font-size: 12px; color: var(--fg);
+}
+.objectives-strip:hover { border-color: var(--accent, #6b7cff); }
+.objectives-strip .obj-tag { font-weight: 600; opacity: 0.85; }
+.objectives-strip .obj-item {
+  padding: 2px 8px; border-radius: 999px; background: rgba(107,124,255,0.12);
+  white-space: nowrap; max-width: 52ch; overflow: hidden; text-overflow: ellipsis;
+}
+
 .mem-history { margin-top: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel, rgba(0,0,0,0.02)); display: flex; flex-direction: column; gap: 4px; }
 .mem-history-empty { font-size: 12px; color: var(--muted); }
 .mem-history-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
@@ -424,6 +507,13 @@ html, body {
   padding: 0 16px; cursor: pointer; font-weight: 600;
 }
 .composer button:disabled { opacity: 0.5; cursor: default; }
+/* Composer actions column: the web-search toggle sits above the Send button. */
+.composer-actions { display: flex; flex-direction: column; gap: 6px; justify-content: flex-end; }
+.composer-actions button { min-height: 42px; }
+.web-toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); cursor: pointer; white-space: nowrap; user-select: none; }
+.web-toggle.on { color: var(--accent, #6b7cff); font-weight: 600; }
+.web-toggle input { accent-color: var(--accent, #6b7cff); margin: 0; }
+.web-note { padding: 0 14px 10px; font-size: 11px; color: var(--muted); line-height: 1.4; }
 /* Small dismiss "×" used on the kickoff / upload-suggestion cards */
 .ic-x { border: none; background: transparent; cursor: pointer; font-size: 16px; line-height: 1; color: var(--muted); padding: 0 4px; }
 .ic-x:hover { color: var(--ink); }
@@ -589,6 +679,12 @@ html, body {
 .compass-head .ic-x { margin-left: auto; }
 .compass-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .compass-chip { width: auto; margin: 0; font-size: 12px; padding: 5px 10px; border-radius: 999px; }
+/* Actions read as "do this" (solid accent); questions read as "you could ask…"
+   (lighter, dashed) so the blended row is legible at a glance. */
+.compass-chip.question {
+  background: transparent; border-style: dashed; border-color: var(--border); color: var(--muted);
+}
+.compass-chip.question:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .compass-reopen { border-top: 1px solid var(--border); margin-top: 6px; width: 100%; text-align: left; background: transparent; border-left: none; border-right: none; border-bottom: none; color: var(--muted); font-size: 12px; padding: 8px 2px 2px; cursor: pointer; }
 .compass-reopen:hover { color: var(--accent); }
 
@@ -612,3 +708,8 @@ html, body {
 .nudge-actions { display: flex; gap: 6px; align-items: center; }
 .nudge-actions .ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
 .nudge-actions .promote { padding: 4px 12px; }
+.nudge-more {
+  width: 100%; border: 1px dashed var(--border); background: transparent; color: var(--muted);
+  border-radius: 8px; padding: 7px 10px; cursor: pointer; font-size: 12px; font-weight: 600;
+}
+.nudge-more:hover { border-color: var(--accent); color: var(--accent); }

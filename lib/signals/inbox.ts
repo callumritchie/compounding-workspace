@@ -49,16 +49,21 @@ export type InboxSignal = {
 
 const CONF_THRESHOLD = 0.6; // below this, a transcript-derived signal is "soft"
 
-// Who may see each family (within the firm-authorised audience that loads the inbox).
+// Who may see each family. The inbox itself is open to the whole team — its whole
+// point is to catch missed risks and opportunities, and that shouldn't depend on
+// job title. The ONE exception is delivery-health: it's derived from internal-team
+// candour ("the team is struggling"), so surfacing it has trust implications and
+// stays gated to the delivery lead. Cross-client families are already
+// de-identified, so breadth there is safe.
 const VISIBILITY: Record<SignalFamily, (user: string) => boolean> = {
-  buying: (u) => ["lead", "sales"].includes(roleOf(u)),
-  competitive: (u) => ["lead", "sales"].includes(roleOf(u)),
-  objection: (u) => ["lead", "sales", "marketing"].includes(roleOf(u)),
-  churn: (u) => ["lead", "sales"].includes(roleOf(u)),
-  "new-service-line": (u) => canAccessSpace(u, "firm"),
-  "early-warning": (u) => canSeeDeliveryHealth(u),
-  "risk-playbook": (u) => canSeeDeliveryHealth(u),
-  "delivery-health": (u) => canSeeDeliveryHealth(u),
+  buying: () => true,
+  competitive: () => true,
+  objection: () => true,
+  churn: () => true,
+  "new-service-line": () => true,
+  "early-warning": () => true,
+  "risk-playbook": () => true,
+  "delivery-health": (u) => canSeeDeliveryHealth(u), // sensitive team-candour → lead only
 };
 
 const userRoute = (user: string): SignalRoute =>
