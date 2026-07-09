@@ -183,6 +183,17 @@ html, body {
 .live { display: flex; flex-direction: column; gap: 4px; }
 .live-think { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.4; }
 .live-step { font-size: 12px; line-height: 1.5; }
+.live-sub { margin-left: 16px; color: var(--muted); }
+
+/* Deep-agent plan checklist (the adaptive to-do list) */
+.live-plan { display: flex; flex-direction: column; gap: 3px; margin: 2px 0 6px; padding: 8px 10px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--panel); }
+.live-plan-h { font-size: 11px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
+.plan-item { font-size: 12px; line-height: 1.5; display: flex; gap: 8px; align-items: baseline; }
+.plan-check { display: inline-block; width: 12px; text-align: center; color: var(--muted); flex: none; }
+.plan-done { color: var(--muted); }
+.plan-done span:last-child { text-decoration: line-through; }
+.plan-in_progress { font-weight: 600; }
+.plan-in_progress .plan-check { color: var(--accent); }
 
 /* Per-message X-ray */
 .xray-wrap { margin-top: 4px; }

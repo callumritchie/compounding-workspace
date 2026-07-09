@@ -346,6 +346,7 @@ export default function Home() {
   const [liveSteps, setLiveSteps] = useState<string[]>([]); // tool steps as they happen
   const [liveReasoning, setLiveReasoning] = useState(""); // streamed thinking
   const [liveText, setLiveText] = useState(""); // streamed answer so far
+  const [livePlan, setLivePlan] = useState<{ step: string; status: string }[]>([]); // deep-agent plan checklist
   const [xray, setXray] = useState<Record<number, boolean>>({}); // which messages are expanded
 
   const [files, setFiles] = useState<string[]>([]);
@@ -1284,6 +1285,7 @@ export default function Home() {
     setLiveSteps([]);
     setLiveReasoning("");
     setLiveText("");
+    setLivePlan([]);
 
     try {
       const res = await fetch("/api/chat", {
@@ -1321,6 +1323,17 @@ export default function Home() {
           } else if (ev.type === "text") {
             answer += String(ev.text);
             setLiveText(answer);
+          } else if (ev.type === "plan") {
+            setLivePlan((ev.todos as { step: string; status: string }[]) ?? []);
+          } else if (ev.type === "delegate") {
+            if (ev.phase === "start") {
+              const t = String(ev.task ?? "");
+              setLiveSteps((s) => [...s, `🤝 Delegating to ${String(ev.agent)}${t ? `: ${t.slice(0, 72)}${t.length > 72 ? "…" : ""}` : ""}`]);
+            } else {
+              setLiveSteps((s) => [...s, `✅ ${String(ev.agent)} reported back`]);
+            }
+          } else if (ev.type === "subtool") {
+            setLiveSteps((s) => [...s, `↳ ${toolStepLabel(String(ev.name), String(ev.summary))}`]);
           } else if (ev.type === "done") {
             setMessages((ev.history as Message[]) ?? []);
             setTrace((ev.trace as TraceEntry[]) ?? []);
@@ -1345,6 +1358,7 @@ export default function Home() {
       setLiveSteps([]);
       setLiveReasoning("");
       setLiveText("");
+      setLivePlan([]);
     }
   }
 
@@ -1914,8 +1928,19 @@ export default function Home() {
                   <div className="role">agent</div>
                   <div className="live">
                     {liveReasoning && <div className="live-think">💭 {liveReasoning}</div>}
+                    {livePlan.length > 0 && (
+                      <div className="live-plan">
+                        <div className="live-plan-h">📋 Plan</div>
+                        {livePlan.map((t, i) => (
+                          <div key={i} className={`plan-item plan-${t.status}`}>
+                            <span className="plan-check">{t.status === "done" ? "✓" : t.status === "in_progress" ? "▸" : "○"}</span>
+                            <span>{t.step}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {liveSteps.map((s, i) => (
-                      <div key={i} className="live-step">{s}</div>
+                      <div key={i} className={s.startsWith("↳") ? "live-step live-sub" : "live-step"}>{s}</div>
                     ))}
                     {liveText ? (
                       <div className="markdown">

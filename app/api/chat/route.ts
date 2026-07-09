@@ -27,8 +27,8 @@ import { recordReuse } from "@/lib/reuse";
 import { assembleContext, estimateTokens } from "@/lib/assemble";
 import { getRelevantMemories, recordMemoryUse, graduateOnUse } from "@/lib/memory";
 import { getProjectConfig } from "@/lib/project";
-import { getAgent } from "@/lib/agents";
-import { TOOLS } from "@/lib/tools";
+import { getAgent, listAgents } from "@/lib/agents";
+import { TOOLS, DEEP_TOOLS } from "@/lib/tools";
 import { listFiles, DEFAULT_PROJECT } from "@/lib/corpus";
 
 export async function POST(req: Request) {
@@ -68,7 +68,16 @@ export async function POST(req: Request) {
   // Which agent is this chat running? (Its persona/model/tools drive the turn.)
   const chatMeta = allChats.find((c) => c.chatId === chatId);
   const agent = await getAgent(chatMeta?.agentId);
-  const agentTools = agent.tools?.length ? TOOLS.filter((t) => agent.tools.includes(t.name)) : TOOLS;
+  const agentTools = agent.tools?.length
+    ? [...TOOLS, ...DEEP_TOOLS].filter((t) => agent.tools.includes(t.name))
+    : TOOLS;
+
+  // The other roster agents are available as sub-agents the current agent may
+  // delegate to (only a deep agent with the `delegate` tool will actually use them).
+  const roster = await listAgents();
+  const subagents = roster
+    .filter((a) => a.id !== agent.id)
+    .map((a) => ({ id: a.id, name: a.name, systemPrompt: a.systemPrompt, model: a.model, toolNames: a.tools }));
 
   // Retrieve the RELEVANT in-scope memories for this question (constitution +
   // pinned always; learned by embedding relevance within the scope lattice), then
@@ -134,6 +143,7 @@ export async function POST(req: Request) {
             stableBlock: assembled.stableBlock,
             volatileBlock,
             agent: { systemPrompt: agent.systemPrompt, model: agent.model, toolNames: agent.tools },
+            subagents,
           },
           (ev: AgentEvent) => send(ev)
         );
