@@ -30,3 +30,22 @@ export async function embed(texts: string[]): Promise<number[][]> {
 export async function embedOne(text: string): Promise<number[]> {
   return (await embed([text]))[0];
 }
+
+// How many tokens each text costs THIS model's tokenizer (incl. the [CLS]/[SEP]
+// specials). all-MiniLM has a ~256-token window and silently truncates past it,
+// so the indexer uses this to guarantee no chunk overflows (see vectors.ts).
+export async function countTokens(texts: string[]): Promise<number[]> {
+  if (texts.length === 0) return [];
+  const extractor = await getExtractor();
+  // The feature-extraction pipeline exposes the model's own tokenizer.
+  const tokenizer = (extractor as unknown as { tokenizer: (t: string) => { input_ids: { dims: number[] } } }).tokenizer;
+  return texts.map((t) => {
+    const enc = tokenizer(t);
+    const dims = enc.input_ids.dims; // [1, seqLen]
+    return dims[dims.length - 1];
+  });
+}
+
+// The embedder's usable context. Keep chunks at or under this so nothing is
+// truncated at embed time. Exported so the indexer and any splitter share it.
+export const MAX_EMBED_TOKENS = 256;

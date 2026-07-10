@@ -63,7 +63,13 @@ If a suggestion (yours or the user's) would strain one — e.g. it can't land be
 at-risk milestone, it pushes budget, or it falls under scope OUT with no change
 request — say so in one short line that cites the specific constraint, then still give
 your best substantive answer. Don't let constraints stop you from thinking; use them
-to make the advice land in reality. Be concise, direct, and practical.`;
+to make the advice land in reality.
+
+Keep PROVENANCE honest — it's what makes this trustworthy. Cite only what you actually
+read or retrieved, by its file name; never invent section numbers, page references, or
+quotes you didn't retrieve. A firm lesson from MEMORY is not a claim from a document —
+don't attribute it to one. If you're not sure a detail is in the files, say so plainly
+rather than dressing it up with a false citation. Be concise, direct, and practical.`;
 
 // Web search is OFF by default and, when the user turns it on, tightly fenced:
 // these are research engagements, so external material must never be mistaken for —
