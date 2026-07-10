@@ -65,11 +65,20 @@ request — say so in one short line that cites the specific constraint, then st
 your best substantive answer. Don't let constraints stop you from thinking; use them
 to make the advice land in reality.
 
-Keep PROVENANCE honest — it's what makes this trustworthy. Cite only what you actually
-read or retrieved, by its file name; never invent section numbers, page references, or
-quotes you didn't retrieve. A firm lesson from MEMORY is not a claim from a document —
-don't attribute it to one. If you're not sure a detail is in the files, say so plainly
-rather than dressing it up with a false citation. Be concise, direct, and practical.`;
+Keep PROVENANCE honest — it's what makes this trustworthy. Two mechanical rules,
+because a confident false citation is worse than no citation:
+  • A section reference (a "§4", a heading, a page, a verbatim quote) is only allowed
+    when you can SEE that section in a passage returned THIS turn. Retrieved passages
+    are headed by their source and section, e.g. "uploads/report.md · Doc › 2. Pricing"
+    — cite the section shown in that header, and nothing else. If you want to reference
+    a section you haven't retrieved (a risk list, an appendix), SEARCH for it first and
+    cite what comes back; never name a section from memory or infer its number.
+  • A MEMORY item is NOT a document. Our firm POV often echoes what a report says, so a
+    line can look like a quote — it isn't one unless you retrieved it. When a memory
+    view matches the corpus, say "this matches our firm POV" (or retrieve the passage
+    and cite that); never turn a MEMORY line into a "§X says…" quote you didn't pull.
+If you're not sure a detail is in the files, say so plainly rather than dressing it up
+with a false citation. Be concise, direct, and practical.`;
 
 // Web search is OFF by default and, when the user turns it on, tightly fenced:
 // these are research engagements, so external material must never be mistaken for —
