@@ -1,0 +1,34 @@
+{
+  "source": "clickup",
+  "label": "ClickUp · Opportunities pipeline",
+  "items": [
+    {
+      "id": "cu-acme-expansion",
+      "client": "Acme",
+      "sector": "financial-services",
+      "project": "acme-expansion",
+      "title": "Acme expansion (£180k) has sat in \"Proposal\" for 21 days with no next action",
+      "detail": "ClickUp pipeline · stage unchanged since the last workshop · owner unassigned",
+      "evidence": [
+        "ClickUp › Opportunities › \"Acme — Platform expansion\" · stage: Proposal · £180,000 · last moved 21d ago"
+      ],
+      "confidence": 0.8,
+      "urgency": 0.85,
+      "note": "Joins to the corpus: Acme buying-signal intel is live in the feed, but the pipeline shows the deal going cold. The two together say re-engage now — neither source says it alone."
+    },
+    {
+      "id": "cu-harbor-inbound",
+      "client": "Harbor Retail",
+      "sector": "retail",
+      "project": "harbor-retail",
+      "title": "New inbound from Harbor Retail logged in ClickUp — unqualified, no owner",
+      "detail": "ClickUp pipeline · \"Discovery\" stage · created 3 days ago · sat untouched",
+      "evidence": [
+        "ClickUp › Opportunities › \"Harbor Retail — analytics scoping\" · stage: Discovery · created 3d ago · owner: unassigned"
+      ],
+      "confidence": 0.45,
+      "urgency": 0.6,
+      "note": "Early and rough — surfaced so a fresh inbound isn't lost, but it needs qualifying before acting."
+    }
+  ]
+}

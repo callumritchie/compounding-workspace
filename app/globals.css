@@ -822,6 +822,7 @@ html, body {
 .insight-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 7px; }
 .insight .for-you { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; color: var(--accent); border: 1px solid currentColor; border-radius: 4px; padding: 1px 6px; }
 .anon-tag { font-family: var(--mono); font-size: 10.5px; color: var(--delivery); }
+.conn-tag { font-family: var(--mono); font-size: 10.5px; color: var(--delivery); background: var(--delivery-soft); border: 1px solid var(--delivery); border-radius: 4px; padding: 1px 6px; }
 .insight-title { font-weight: 620; font-size: 15px; letter-spacing: -.01em; }
 .insight.retired .insight-title { text-decoration: line-through; text-decoration-color: var(--ink-3); }
 .insight-detail { color: var(--ink-2); font-size: 13.5px; line-height: 1.5; margin-top: 4px; }
@@ -836,6 +837,10 @@ html, body {
 .ev-toggle:hover { border-color: var(--accent); color: var(--accent); }
 .ev-toggle.open { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .ev-trail { margin-top: 11px; border-top: 1px dashed var(--hair); padding-top: 4px; }
+/* plain-language gloss at the top of the trail (how a score is built / how sources join) */
+.ev-note { font-size: 12.5px; line-height: 1.55; color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--hair); border-radius: var(--r-sm); padding: 8px 11px; margin: 10px 0; }
+.ev-note-deid { color: var(--delivery); background: var(--delivery-soft); border-color: var(--delivery); }
+.ev-note-deid b { color: var(--delivery); }
 .ev-line { display: grid; grid-template-columns: 68px 1fr; gap: 12px; align-items: start; padding: 9px 0; border-top: 1px solid var(--hair-2); font-size: 13px; line-height: 1.5; }
 .ev-line:first-child { border-top: 0; }
 .ev-kind { font-family: var(--mono); font-size: 9.5px; letter-spacing: .04em; text-transform: uppercase; font-weight: 600; text-align: center; padding: 3px 0; border-radius: 5px; background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--hair); height: fit-content; margin-top: 1px; }

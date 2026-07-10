@@ -19,12 +19,19 @@ import { roleOf, canAccessSpace, canSeeDeliveryHealth } from "../team";
 import { queryAtoms } from "./atoms";
 import { accountHealth, riskEarlyWarnings, deliveryHealth, mitigationPlaybook } from "./temporal";
 import { detectWhitespace } from "./whitespace";
+import { connectedSignals } from "./connected";
 
 export type SignalFamily =
   | "buying" | "competitive" | "objection" | "churn"
-  | "early-warning" | "delivery-health" | "risk-playbook" | "new-service-line";
+  | "early-warning" | "delivery-health" | "risk-playbook" | "new-service-line"
+  // Connected-workspace families (demo): sourced from mocked MCP connectors, not the corpus.
+  | "pipeline" | "resourcing" | "pricing";
 
 export type SignalRoute = "sales" | "marketing" | "leadership" | "practice";
+
+// A connected data source (mocked MCP connector). Present only on demo signals so the
+// UI can label their provenance and never conflate them with corpus-derived intel.
+export type ConnectedSource = "clickup" | "drive" | "pricing";
 
 export type InboxSignal = {
   id: string;
@@ -45,6 +52,8 @@ export type InboxSignal = {
   soft: boolean; // below confidence threshold → needs review before acting
   deIdentified: boolean;
   actions: { draft: boolean; nominate: boolean }; // which in-place actions apply
+  source?: ConnectedSource; // set only on connected-workspace (demo) signals
+  note?: string; // plain-language gloss shown in the evidence panel (e.g. how a score is built)
 };
 
 const CONF_THRESHOLD = 0.6; // below this, a transcript-derived signal is "soft"
@@ -64,6 +73,10 @@ const VISIBILITY: Record<SignalFamily, (user: string) => boolean> = {
   "early-warning": () => true,
   "risk-playbook": () => true,
   "delivery-health": (u) => canSeeDeliveryHealth(u), // sensitive team-candour → lead only
+  // Connected-workspace (demo) families ride the same open inbox as the rest.
+  pipeline: () => true,
+  resourcing: () => true,
+  pricing: () => true,
 };
 
 const userRoute = (user: string): SignalRoute =>
@@ -122,12 +135,15 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
     if (d.band === "healthy") continue;
     mk({
       id: `dh:${d.project}`, family: "delivery-health", route: "practice",
-      title: `${d.project} delivery health: ${d.band} (${d.score})`,
+      title: `${d.project} delivery health: ${d.band}`,
       detail: d.drivers.join("; "),
       evidence: [d.evidence].filter(Boolean),
       project: d.project, client: d.client, sector: d.sector,
-      confidence: 0.8, urgency: d.band === "at-risk" ? 0.9 : 0.6,
+      // Confidence follows how many independent drivers agree — one driver is a hint,
+      // three converging is a firm read. (No invented number: driver count is real.)
+      confidence: Math.min(0.9, 0.5 + d.drivers.length * 0.15), urgency: d.band === "at-risk" ? 0.9 : 0.6,
       soft: false, deIdentified: false,
+      note: `Delivery-risk index ${d.score.toFixed(2)} / 1.00 — lower is worse. Built from ${d.drivers.join(", ")}.`,
       actions: { draft: false, nominate: false },
     });
   }
@@ -156,7 +172,9 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
       detail: `${worked?.worked ?? 0} resolved with this mitigation; other approaches stalled`,
       evidence: e.mitigations.map((m) => `"${m.mitigation}" → worked ${m.worked}, failed ${m.failed}`),
       support: { sectors: e.sectors, count: e.mitigations.reduce((n, m) => n + m.projects.length, 0) },
-      confidence: 0.85, urgency: 0.4,
+      // Confidence tracks the recommended mitigation's real track record: one win is a
+      // lead, several is a playbook. Weakly-evidenced patterns land Medium, not High.
+      confidence: Math.max(0.45, Math.min(0.9, 0.4 + (worked?.worked ?? 0) * 0.12)), urgency: 0.4,
       soft: false, deIdentified: true,
       actions: { draft: false, nominate: true },
     });
@@ -175,6 +193,11 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
       actions: { draft: true, nominate: true },
     });
   }
+
+  // ---- Connected workspace (DEMO): ClickUp pipeline, Drive resourcing, pricing sheets ----
+  // Mocked MCP-sourced signals that JOIN operating data to the project corpus. Labelled
+  // as demo end-to-end; they ride the same scoring, gating and evidence surfaces.
+  for (const seed of await connectedSignals(user)) mk(seed);
 
   // Gate by role, then rank by score.
   const signals = raw.filter((s) => VISIBILITY[s.family](user)).sort((a, b) => b.score - a.score);

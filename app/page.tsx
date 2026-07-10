@@ -290,7 +290,6 @@ type EmergentTheme = {
   support: { projects: string[]; clients: string[]; sectors: string[]; count: number };
   evidence: string[];
 };
-type SectorDensity = { sector: string; projects: number; clients: number; cards: number; lessons: number; ready: boolean };
 type InboxSignal = {
   id: string;
   family: string;
@@ -309,6 +308,8 @@ type InboxSignal = {
   soft: boolean;
   deIdentified: boolean;
   actions: { draft: boolean; nominate: boolean };
+  source?: "clickup" | "drive" | "pricing"; // connected-workspace (demo) provenance
+  note?: string; // plain-language gloss shown in the evidence panel
   assessment?: SignalAssessment; // auditable confidence read (mirror of lib/signals/assess)
 };
 // Auditable confidence: the real drivers behind a rating + the counter-check.
@@ -407,7 +408,6 @@ export default function Home() {
   const [inboxLoading, setInboxLoading] = useState(false);
   const [dismissed, setDismissed] = useState<Record<string, boolean>>({});
   const [sigFeedback, setSigFeedback] = useState<Record<string, "helpful" | "not-useful">>({}); // per-signal reaction
-  const [readySectors, setReadySectors] = useState<SectorDensity[] | null>(null);
   const briefingUserRef = useRef<string | null>(null);
   // Inbox: tab, filters, and the cross-everything query surface.
   const [inboxTab, setInboxTab] = useState<"all" | "risk" | "opp" | "fyi">("all");
@@ -418,7 +418,7 @@ export default function Home() {
   const [inboxQueryLoading, setInboxQueryLoading] = useState(false);
   // Surfaced feed (redesign): confidence is the throttle (default High); evidence
   // expands per-insight; annotations are the shared human layer keyed by signal id.
-  const [inboxMinConf, setInboxMinConf] = useState<"high" | "medium" | "all">("high");
+  const [inboxMinConf, setInboxMinConf] = useState<"high" | "medium" | "all">("all");
   const [annById, setAnnById] = useState<Record<string, AnnotationRollup>>({});
   const [expandedSig, setExpandedSig] = useState<Record<string, boolean>>({});
   const [noteOpenFor, setNoteOpenFor] = useState<string | null>(null);
@@ -685,24 +685,14 @@ export default function Home() {
     if (view !== "home") return;
     if (briefingUserRef.current === user) return; // already loaded for this persona
     briefingUserRef.current = user;
-    setReadySectors(null);
     setInboxSignals(null);
     setInboxLoading(true);
-    fetch(`/api/home/briefing?user=${user}`).then((r) => r.json()).then((d) => setReadySectors(d.sectors ?? [])).catch(() => setReadySectors([]));
     fetch(`/api/signals/inbox?user=${user}`)
       .then((r) => r.json())
       .then((d) => { setInboxSignals(d.signals ?? []); setAnnById(d.annotations ?? {}); })
       .catch(() => setInboxSignals([]))
       .finally(() => setInboxLoading(false));
   }, [view, user]);
-
-  // Open the lens for a given sector from the briefing (fall back to firm-wide).
-  function openSectorLens(sector: string) {
-    const s =
-      spaces.find((sp) => sp.type === "sector" && (sp.name.toLowerCase().includes(sector.toLowerCase()) || sp.id.includes(sector))) ??
-      spaces.find((sp) => sp.type === "firm");
-    if (s) openSpace(s.id);
-  }
 
   // Clear the space results when switching lens.
   useEffect(() => { setSpaceAnswer(null); setOpps(null); setThemes(null); }, [spaceId]);
@@ -809,7 +799,16 @@ export default function Home() {
         <div className="insight-head">
           <span className={`kind-pill kind-${kind}`}>{groupMeta(s.family).label}</span>
           {mine && <span className="for-you">for your desk</span>}
-          {s.deIdentified && <span className="anon-tag" title="combined across several clients, with client names removed">🛡 de-identified</span>}
+          {s.source && (
+            <span className="conn-tag" title="Demo: sourced from a connected workspace tool over MCP (ClickUp / Google Drive / pricing sheet), joined to the project corpus — see VISION.md">
+              🔗 {s.source === "clickup" ? "via ClickUp" : s.source === "drive" ? "via Google Drive" : "via pricing sheet"} · demo
+            </span>
+          )}
+          {s.deIdentified && (
+            <span className="anon-tag" title="Aggregated across several clients with their names removed — you see the cross-client pattern, never any single client's data.">
+              🛡 de-identified
+            </span>
+          )}
         </div>
         <div className="insight-title">{s.title}</div>
         <div className="insight-detail">{s.detail}</div>
@@ -824,6 +823,14 @@ export default function Home() {
         </button>
         {open && (
           <div className="ev-trail">
+            {/* Plain-language gloss: how a score is built, or how connected sources join. */}
+            {s.note && <div className="ev-note">{s.note}</div>}
+            {/* What "de-identified" actually means, taught in context. */}
+            {s.deIdentified && (
+              <div className="ev-note ev-note-deid">
+                🛡 <b>De-identified</b> — combined across several clients with names removed, so you get the cross-client pattern without exposing any single client's data.
+              </div>
+            )}
             {/* Why this rating — the real drivers, graded (auditable confidence). */}
             {s.assessment && s.assessment.factors.length > 0 && (
               <div className="ev-why">
@@ -844,7 +851,7 @@ export default function Home() {
             {s.evidence.length === 0 && <div className="ev-empty">No verbatim excerpts attached to this signal.</div>}
             {s.evidence.map((q, i) => (
               <div className="ev-line" key={i}>
-                <span className="ev-kind">{s.deIdentified ? "Pattern" : "Internal"}</span>
+                <span className="ev-kind">{s.source ? "Source" : s.deIdentified ? "Pattern" : "Internal"}</span>
                 <span className="ev-quote">“{q}”</span>
               </div>
             ))}
@@ -930,6 +937,9 @@ export default function Home() {
       "delivery-health": { icon: "🩺", label: "delivery health" },
       "risk-playbook": { icon: "📘", label: "risk playbook" },
       "new-service-line": { icon: "🌱", label: "new service line" },
+      pipeline: { icon: "📊", label: "pipeline" },
+      resourcing: { icon: "🧑‍💼", label: "resourcing" },
+      pricing: { icon: "💷", label: "pricing" },
     };
     return m[family] ?? { icon: "🔔", label: family };
   }
@@ -967,11 +977,14 @@ export default function Home() {
   function groupMeta(family: string): { label: string; kind: "opp" | "risk" | "deliv"; order: number } {
     const m: Record<string, { label: string; kind: "opp" | "risk" | "deliv"; order: number }> = {
       buying: { label: "Buying signal", kind: "opp", order: 1 },
+      pipeline: { label: "Pipeline", kind: "opp", order: 1.5 },
       "new-service-line": { label: "Expand the offer", kind: "opp", order: 2 },
+      pricing: { label: "Pricing & margin", kind: "opp", order: 2.5 },
       competitive: { label: "Competitive", kind: "deliv", order: 3 },
       objection: { label: "Objection / positioning", kind: "deliv", order: 4 },
       churn: { label: "Retention risk", kind: "risk", order: 5 },
       "early-warning": { label: "Early warning", kind: "risk", order: 6 },
+      resourcing: { label: "Resourcing", kind: "risk", order: 6.5 },
       "delivery-health": { label: "Delivery health", kind: "risk", order: 7 },
       "risk-playbook": { label: "Risk playbook", kind: "risk", order: 8 },
     };
@@ -1783,7 +1796,6 @@ export default function Home() {
   const myProjects = projects.filter((p) => showAllProjects || (p.team ?? []).includes(user));
   const activeProjects = myProjects.filter((p) => p.status !== "complete");
   const completedProjects = myProjects.filter((p) => p.status === "complete");
-  const visibleLenses = spaces.filter((s) => s.type !== "firm" || canAccessFirmClient(user));
 
   return (
     <div className="app">
@@ -2016,17 +2028,6 @@ export default function Home() {
                   </div>
                 </div>
 
-                {readySectors && readySectors.some((s) => s.ready) && (
-                  <div className="ready-row">
-                    {readySectors.filter((s) => s.ready).map((s) => (
-                      <button key={s.sector} className="ready-card" onClick={() => openSectorLens(s.sector)} title="open this sector lens">
-                        <span className="ready-sector">🟢 {s.sector.replace(/-/g, " ")}</span>
-                        <span className="ready-meta">{s.clients} clients · {s.cards} engagements · ready to pitch</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-
                 {inboxLoading && <div className="iq-process">scanning transcripts, risk registers &amp; offer gaps for signals…</div>}
                 {memNote && <div className="hint briefing-note">{memNote}</div>}
 
@@ -2057,25 +2058,6 @@ export default function Home() {
               </section>
             );
           })()}
-
-          {/* ---- Lenses: drill into an account / sector / the firm ---- */}
-          <section className="home-section">
-            <div className="home-section-head">
-              <h3>{isDeliveryRoleClient(user) ? "Across your work" : "Cross-engagement lenses"}</h3>
-            </div>
-            <p className="home-hint">
-              Query, spot opportunities, and triangulate signals within one account, sector, or the whole firm. Answers are de-identified where client data is combined.
-            </p>
-            <div className="lens-grid">
-              {visibleLenses.map((s) => (
-                <button key={s.id} className={`lens-card lens-${s.type}`} onClick={() => openSpace(s.id)}>
-                  <span className="lens-icon">{s.type === "account" ? "🏢" : s.type === "sector" ? "🌐" : "🏛"}</span>
-                  <span className="lens-name">{s.name}</span>
-                  <span className="lens-meta">{s.type} · {s.projects} engagements</span>
-                </button>
-              ))}
-            </div>
-          </section>
 
           </>)}
         </div>
