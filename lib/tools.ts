@@ -218,10 +218,21 @@ export async function executeTool(
         const pool = await search(q, projectId, 8);
         const order = pool.length ? await rerank(q, pool.map((h) => h.text), 4) : [];
         const hits = order.map((i) => pool[i]);
-        // One passage per hit, headed by its source file + fused relevance score, so
-        // both the model and the x-ray's RAG panel can see WHAT was retrieved and how
-        // strongly it matched (across both arms) before reranking picked the best.
-        const text = hits.map((h) => `[relevance ${Math.round(h.score * 100)}%] ${h.file}\n${h.text}`).join("\n---\n");
+        // One passage per hit, headed by its source file + section + fused relevance
+        // score, so both the model and the x-ray's RAG panel can see WHAT was retrieved
+        // and how strongly it matched (across both arms) before reranking picked the
+        // best. The section breadcrumb (baked into each chunk as a leading "[Doc › §]"
+        // line) is lifted into the header so it reads as the ONE citable handle for this
+        // passage — the model should cite this section, not guess a number from memory.
+        const text = hits
+          .map((h) => {
+            const m = h.text.match(/^\[([^\]]+)\]\s*\n+([\s\S]*)$/);
+            const crumb = m ? m[1] : "";
+            const body = m ? m[2].trim() : h.text;
+            const head = `[relevance ${Math.round(h.score * 100)}%] ${h.file}${crumb ? ` · ${crumb}` : ""}`;
+            return `${head}\n${body}`;
+          })
+          .join("\n---\n");
         return {
           result: text || "(no matches — the vector index may be empty; run `npm run index`)",
           summary: `semantic_search "${q}" → ${hits.length} best of ${pool.length}`,
