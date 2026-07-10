@@ -39,8 +39,15 @@ inspectable in the glass box.
   lessons flow into the next.
 
 **Retrieval (RAG)** — large raw files *pulled* on demand:
-- Local embeddings (Transformers.js, in-process), brute-force cosine vector store (JSON).
+- Local embeddings (Transformers.js, in-process) in a **sqlite-vec** store, **hybrid search**
+  (semantic ⊕ BM25/FTS5, fused by reciprocal rank) with a reranker on top.
+- **Heading-aware chunking**: every chunk carries its section breadcrumb (`Doc › 9. Risks`), so a
+  retrieved passage knows where it came from — and that breadcrumb is the only thing the agent may cite.
 - Upload PDFs/text → extracted, chunked, embedded.
+- **Grounded, honestly-cited answers**: the agent cites a section only when that section was actually
+  retrieved this turn — a firm-POV memory that echoes a document is never dressed up as a `§X` quote it
+  didn't pull. A separate **faithfulness eval** (LLM-as-judge) scores every answer for grounding + citation
+  accuracy and gates on it, so "our answers are evidenced" is a measured claim, not a hope.
 - **⚖ Compare retrieval**: one question, three ways — naïve-vector vs reranked-vector vs agentic — side by side.
 
 ## Cross-engagement intelligence (the 🔍 Interrogate tab)
@@ -79,6 +86,7 @@ memory), working context ("summarise **this**"), and an **eval harness** that ga
 | `npm run dev` | Run the app |
 | `npm run index` | Rebuild the vector index from the corpus |
 | `npm run eval` | Run the scored golden-set regression gate |
+| `npm run eval:faith` | Grade every answer's grounding + citation accuracy (faithfulness gate) |
 
 ## Where things live
 | Path | What |
