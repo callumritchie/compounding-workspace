@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "sh scripts/with-env.sh next start",
     "eval": "sh scripts/with-env.sh tsx scripts/eval.ts",
+    "eval:faith": "sh scripts/with-env.sh tsx scripts/eval-faithfulness.ts",
     "index": "sh scripts/with-env.sh tsx scripts/build-index.ts",
     "db:reseed": "sh scripts/with-env.sh tsx scripts/db-reseed.ts",
     "db:maintain": "sh scripts/with-env.sh tsx scripts/db-maintain.ts",

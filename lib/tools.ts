@@ -212,16 +212,16 @@ export async function executeTool(
       }
       case "semantic_search": {
         const q = String(input.query ?? "");
-        // Cast a wide net (top-8 by vector similarity), then let the reranker
-        // pick the passages that actually answer the query, best first. This is
-        // the single, opinionated retrieval path — no comparison view needed.
+        // Cast a wide net (top-8 by HYBRID search — semantic meaning ⊕ keyword/BM25,
+        // fused), then let the reranker pick the passages that actually answer the
+        // query, best first. This is the single, opinionated retrieval path.
         const pool = await search(q, projectId, 8);
         const order = pool.length ? await rerank(q, pool.map((h) => h.text), 4) : [];
         const hits = order.map((i) => pool[i]);
-        // One passage per hit, headed by its source file + vector similarity, so
-        // both the model and the x-ray's RAG panel can see WHAT was retrieved and
-        // HOW close it was in embedding space (before reranking picked the best).
-        const text = hits.map((h) => `[sim ${Math.round(h.score * 100)}%] ${h.file}\n${h.text}`).join("\n---\n");
+        // One passage per hit, headed by its source file + fused relevance score, so
+        // both the model and the x-ray's RAG panel can see WHAT was retrieved and how
+        // strongly it matched (across both arms) before reranking picked the best.
+        const text = hits.map((h) => `[relevance ${Math.round(h.score * 100)}%] ${h.file}\n${h.text}`).join("\n---\n");
         return {
           result: text || "(no matches — the vector index may be empty; run `npm run index`)",
           summary: `semantic_search "${q}" → ${hits.length} best of ${pool.length}`,
