@@ -1,0 +1,34 @@
+{
+  "source": "drive",
+  "label": "Google Drive · Resourcing plan",
+  "items": [
+    {
+      "id": "dr-meridian-migration",
+      "client": "Meridian Health",
+      "sector": "healthcare",
+      "project": "meridian-health",
+      "title": "No senior data engineer staffed for Meridian Health's next milestone — and delivery health is already at-risk",
+      "detail": "Resourcing sheet · migration milestone in 2 weeks · role open · no one allocated",
+      "evidence": [
+        "Google Drive › Resourcing 2026.xlsx › Meridian Health · \"Data migration\" milestone · Senior Data Engineer: UNSTAFFED"
+      ],
+      "confidence": 0.7,
+      "urgency": 0.85,
+      "note": "Joins to the corpus: delivery-health already flags this engagement's next milestone at-risk. The resourcing gap is the likely cause — surfacing them together turns a symptom into a fix (staff the role)."
+    },
+    {
+      "id": "dr-rolloff-bench",
+      "client": "Acme",
+      "sector": "financial-services",
+      "project": "acme-diligence",
+      "title": "Consultant rolls off Acme diligence in 2 weeks with no next placement",
+      "detail": "Resourcing sheet · bench risk · skills match two open pipeline opportunities",
+      "evidence": [
+        "Google Drive › Resourcing 2026.xlsx › J. Okafor · Acme diligence ends in 14d · next assignment: none"
+      ],
+      "confidence": 0.6,
+      "urgency": 0.55,
+      "note": "Joins to the pipeline: this person's skills match the stalled Acme expansion and the Harbor inbound — a placement and a pipeline nudge in one move."
+    }
+  ]
+}
