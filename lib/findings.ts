@@ -442,7 +442,8 @@ export async function detectUngroundedClaim(input: {
   // have answered from memory, which is legitimately not a "§ says" claim). Stay quiet.
   if (!evidence.trim() || answer.trim().length < 40) return;
   const { judgeAnswer } = await import("./faithfulness");
-  const verdict = await judgeAnswer({ question, answer, evidence }).catch(() => null);
+  // Live, per-answer check → cheaper judge (best-effort flag, not the eval gate).
+  const verdict = await judgeAnswer({ question, answer, evidence }, { model: "claude-sonnet-5" }).catch(() => null);
   if (!verdict || verdict.faithfulness >= 0.6 || verdict.unsupported.length === 0) return;
 
   const claim = verdict.unsupported[0];
