@@ -826,6 +826,17 @@ html, body {
 .dismiss-reasons button:hover { border-color: var(--accent); color: var(--accent); }
 .nudge-saved { font-family: var(--mono); font-size: 10.5px; color: var(--good); }
 
+/* In-project Findings panel — the same ledger rows, docked at the top of the chat
+   column so the flags are always available (not only in the corner nudge). */
+.findings-panel { flex: none; border: 1px solid var(--hair); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow-sm, 0 1px 2px rgba(60,40,25,.05)); margin: 10px 14px 0; overflow: hidden; }
+.findings-panel-head { display: flex; align-items: center; gap: 9px; width: 100%; background: var(--surface-2); border: 0; padding: 8px 12px; cursor: pointer; font-family: inherit; color: inherit; text-align: left; }
+.findings-panel-head:hover { background: var(--hair-2); }
+.fp-title { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .05em; color: var(--ink); text-transform: uppercase; }
+.fp-count { font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 100px; padding: 1px 8px; }
+.fp-hint { font-size: 11.5px; color: var(--ink-3); }
+.fp-chev { margin-left: auto; font-size: 11px; color: var(--ink-3); }
+.findings-panel-body { display: flex; flex-direction: column; gap: 7px; padding: 8px; max-height: 42vh; overflow-y: auto; }
+
 /* ===========================================================================
    Interrogate — evidence-first cross-project intelligence (redesign v2).
    Built on the shared tokens. Ask (pull) → Surfaced feed (push, uncapped,

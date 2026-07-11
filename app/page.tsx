@@ -406,6 +406,7 @@ export default function Home() {
   const [openDraft, setOpenDraft] = useState<Record<string, boolean>>({});
   const [openEvidence, setOpenEvidence] = useState<Record<string, boolean>>({});
   const [reasonOpenFor, setReasonOpenFor] = useState<string | null>(null);
+  const [findingsPanelCollapsed, setFindingsPanelCollapsed] = useState(false);
   // The draft preview per finding ("loading" while it's being written, null if none),
   // and where a saved preview landed in the corpus. previewFetched dedupes fetches.
   const [findingPreview, setFindingPreview] = useState<Record<string, FindingPreview | "loading" | null>>({});
@@ -651,7 +652,12 @@ export default function Home() {
   function toggleFinding(f: ProjectFinding) {
     const willOpen = !openFinding[f.id];
     setOpenFinding((m) => ({ ...m, [f.id]: willOpen }));
-    if (willOpen) loadPreview(f);
+    if (willOpen && hasDraft(f)) loadPreview(f);
+  }
+  // Only two kinds carry a draft preview (the deterministic ones); the LLM-detected
+  // kinds lead with their action instead, so don't fetch a preview that isn't there.
+  function hasDraft(f: ProjectFinding) {
+    return f.kind === "rising-risk" || f.kind === "unanswered-objective";
   }
 
   // Fetch a finding's draft preview (server-cached). Marked fetched so we ask once.
@@ -679,6 +685,129 @@ export default function Home() {
       .then((r) => r.json())
       .then((d) => { if (d?.path) setSavedFinding((m) => ({ ...m, [f.id]: d.path })); })
       .catch(() => {});
+  }
+
+  // One finding as a quiet-ledger row: collapsed to a single line, opening in tiers
+  // (why-now → folded-in draft teaser → evidence). Shared by the corner nudge and the
+  // in-project Findings panel, so both surfaces stay identical.
+  function renderFindingRow(f: ProjectFinding) {
+    const cm = confMeta(f.confidence);
+    const km =
+      f.kind === "rising-risk"
+        ? { label: "Risk escalating", cls: "risk" }
+        : f.kind === "unanswered-objective"
+        ? { label: "Objective gap", cls: "deliv" }
+        : f.kind === "ungrounded-claim"
+        ? { label: "Unsupported claim", cls: "risk" }
+        : f.kind === "contradiction"
+        ? { label: "Contradiction", cls: "risk" }
+        : { label: "Flag", cls: "deliv" };
+    const open = !!openFinding[f.id];
+    const draftOpen = !!openDraft[f.id];
+    const evOpen = !!openEvidence[f.id];
+    const reasonOpen = reasonOpenFor === f.id;
+    const pv = findingPreview[f.id];
+    const saved = savedFinding[f.id];
+    const showDraft = hasDraft(f) && !!f.action;
+    const teaserLabel = f.kind === "unanswered-objective" ? "What would close it" : "Starter mitigation ready";
+    const hasChecks = f.evidence.length > 0 || f.assessment.factors.length > 0;
+    return (
+      <div key={f.id} className={`finding-row kind-${km.cls} ${open ? "open" : ""}`}>
+        {/* Collapsed: one calm line — kind stripe · gist · confidence · chevron. */}
+        <button className="frow-head" aria-expanded={open} onClick={() => toggleFinding(f)}>
+          <span className={`frow-stripe kind-${km.cls}`} />
+          <span className="frow-title">{f.title}</span>
+          <span className="frow-meter conf-meter" title={`${km.label} · ${cm.label}`}>{cm.meter}</span>
+          <span className="frow-chev">▾</span>
+        </button>
+        {open && (
+          <div className="frow-drawer">
+            <div className="frow-why">{f.trigger}</div>
+
+            {/* The hook, folded in: a draft teaser that opens to the full draft. */}
+            {showDraft && (
+              <>
+                <button className="frow-teaser" aria-expanded={draftOpen} onClick={() => setOpenDraft((m) => ({ ...m, [f.id]: !draftOpen }))}>
+                  <span className="frow-spark">✦</span>
+                  <span className="frow-teaser-txt">
+                    <span className="frow-teaser-k">{teaserLabel}</span>
+                    {pv && pv !== "loading" && !draftOpen && <span className="frow-teaser-peek">{pv.body.replace(/\n+/g, " ")}</span>}
+                    {(pv === "loading" || pv === undefined) && !draftOpen && <span className="frow-teaser-peek dim">drafting…</span>}
+                  </span>
+                  <span className="frow-go">{draftOpen ? "▾" : "→"}</span>
+                </button>
+                {draftOpen && (pv === "loading" || pv === undefined) && <div className="frow-draft dim">drafting a starter…</div>}
+                {draftOpen && pv === null && <div className="frow-draft dim">No draft for this finding.</div>}
+                {draftOpen && pv && pv !== "loading" && (
+                  <div className="frow-draft">
+                    <div className="draft-body">{pv.body}</div>
+                    {saved ? (
+                      <div className="nudge-saved">✓ Saved to {saved}</div>
+                    ) : (
+                      <button className="frow-save" onClick={() => saveFinding(f, pv)}>Save to project</button>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Evidence, on demand. */}
+            {hasChecks && (
+              <>
+                <button className="frow-link" aria-expanded={evOpen} onClick={() => setOpenEvidence((m) => ({ ...m, [f.id]: !evOpen }))}>
+                  Evidence{f.evidence.length ? ` · ${f.evidence.length} quote${f.evidence.length === 1 ? "" : "s"}` : ""}{f.assessment.factors.length ? ` · ${f.assessment.factors.length} checks` : ""} <span className="frow-chev sm">▾</span>
+                </button>
+                {evOpen && (
+                  <div className="nudge-ev">
+                    {f.evidence.length === 0 && <div className="ev-empty">Inferred — no verbatim excerpt (the gap itself is the signal).</div>}
+                    {f.evidence.map((q, i) => (
+                      <div className="ev-line" key={i}>
+                        <span className="ev-kind">{q.source}</span>
+                        <span className="ev-quote">“{q.quote}”</span>
+                      </div>
+                    ))}
+                    {f.assessment.factors.length > 0 && (
+                      <div className="factors">
+                        {f.assessment.factors.map((fac, i) => (
+                          <div className={`factor fac-${fac.status}`} key={i}>
+                            <span className="fac-dot">{fac.status === "strong" ? "✓" : fac.status === "moderate" ? "~" : "!"}</span>
+                            <span className="fac-label">{fac.label}</span>
+                            <span className="fac-detail">{fac.detail}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {f.assessment.caveats.length > 0 && (
+                      <div className="counter">
+                        <div className="counter-h">✓ Stress-tested against</div>
+                        <ul>{f.assessment.caveats.map((c, i) => <li key={i}>{c}</li>)}</ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="frow-actions">
+              {f.action && (
+                <button className="promote" disabled={loading || !activeChat} onClick={() => respondFinding(f, "accepted")}>
+                  {f.action.title}
+                </button>
+              )}
+              <span className="frow-spacer" />
+              <button className="ghost" onClick={() => setReasonOpenFor(reasonOpen ? null : f.id)}>Dismiss ▾</button>
+            </div>
+            {reasonOpen && (
+              <div className="dismiss-reasons">
+                <button onClick={() => respondFinding(f, "dismissed", "not-relevant")}>Not relevant</button>
+                <button onClick={() => respondFinding(f, "dismissed", "wrong")}>This is wrong</button>
+                <button onClick={() => respondFinding(f, "snoozed", "not-now")}>Not now</button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
   }
 
   // Refresh the Compass whenever the engagement state has actually moved: a chat
@@ -2238,6 +2367,23 @@ export default function Home() {
                 which plans and delegates to specialists on its own — no agent to pick. */}
           </div>
           <div className="chat">
+            {/* In-project Findings — the grounded flags for THIS engagement, always
+                available here (not only in the corner nudge). Same ledger rows. */}
+            {liveFindings.length > 0 && (
+              <div className="findings-panel">
+                <button className="findings-panel-head" aria-expanded={!findingsPanelCollapsed} onClick={() => setFindingsPanelCollapsed((c) => !c)}>
+                  <span className="fp-title">⚑ Findings</span>
+                  <span className="fp-count">{liveFindings.length}</span>
+                  <span className="fp-hint">grounded flags for this engagement</span>
+                  <span className="fp-chev">{findingsPanelCollapsed ? "▸" : "▾"}</span>
+                </button>
+                {!findingsPanelCollapsed && (
+                  <div className="findings-panel-body">
+                    {liveFindings.map(renderFindingRow)}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="messages">
               {/* Warm start: on a cold project, proactively show what we already know
                   + starter questions + an optional 3-question kickoff interview. */}
@@ -2538,121 +2684,7 @@ export default function Home() {
             {!popupCollapsed && (
               <div className="nudge-body">
                 {shown.map((it) => {
-                  if (it.t === "finding") {
-                    const f = it.f;
-                    const cm = confMeta(f.confidence);
-                    const km =
-                      f.kind === "rising-risk"
-                        ? { label: "Risk escalating", cls: "risk" }
-                        : f.kind === "unanswered-objective"
-                        ? { label: "Objective gap", cls: "deliv" }
-                        : { label: "Flag", cls: "deliv" };
-                    const open = !!openFinding[f.id];
-                    const draftOpen = !!openDraft[f.id];
-                    const evOpen = !!openEvidence[f.id];
-                    const reasonOpen = reasonOpenFor === f.id;
-                    const pv = findingPreview[f.id];
-                    const saved = savedFinding[f.id];
-                    const teaserLabel = f.kind === "unanswered-objective" ? "What would close it" : "Starter mitigation ready";
-                    const hasChecks = f.evidence.length > 0 || f.assessment.factors.length > 0;
-                    return (
-                      <div key={it.id} className={`finding-row kind-${km.cls} ${open ? "open" : ""}`}>
-                        {/* Collapsed: one calm line — kind stripe · gist · confidence · chevron. */}
-                        <button className="frow-head" aria-expanded={open} onClick={() => toggleFinding(f)}>
-                          <span className={`frow-stripe kind-${km.cls}`} />
-                          <span className="frow-title">{f.title}</span>
-                          <span className="frow-meter conf-meter" title={`${km.label} · ${cm.label}`}>{cm.meter}</span>
-                          <span className="frow-chev">▾</span>
-                        </button>
-                        {open && (
-                          <div className="frow-drawer">
-                            <div className="frow-why">{f.trigger}</div>
-
-                            {/* The hook, folded in: a draft teaser that opens to the full draft. */}
-                            {f.action && (
-                              <>
-                                <button className="frow-teaser" aria-expanded={draftOpen} onClick={() => setOpenDraft((m) => ({ ...m, [f.id]: !draftOpen }))}>
-                                  <span className="frow-spark">✦</span>
-                                  <span className="frow-teaser-txt">
-                                    <span className="frow-teaser-k">{teaserLabel}</span>
-                                    {pv && pv !== "loading" && !draftOpen && <span className="frow-teaser-peek">{pv.body.replace(/\n+/g, " ")}</span>}
-                                    {(pv === "loading" || pv === undefined) && !draftOpen && <span className="frow-teaser-peek dim">drafting…</span>}
-                                  </span>
-                                  <span className="frow-go">{draftOpen ? "▾" : "→"}</span>
-                                </button>
-                                {draftOpen && (pv === "loading" || pv === undefined) && <div className="frow-draft dim">drafting a starter…</div>}
-                                {draftOpen && pv === null && <div className="frow-draft dim">No draft for this finding.</div>}
-                                {draftOpen && pv && pv !== "loading" && (
-                                  <div className="frow-draft">
-                                    <div className="draft-body">{pv.body}</div>
-                                    {saved ? (
-                                      <div className="nudge-saved">✓ Saved to {saved}</div>
-                                    ) : (
-                                      <button className="frow-save" onClick={() => saveFinding(f, pv)}>Save to project</button>
-                                    )}
-                                  </div>
-                                )}
-                              </>
-                            )}
-
-                            {/* Evidence, on demand. */}
-                            {hasChecks && (
-                              <>
-                                <button className="frow-link" aria-expanded={evOpen} onClick={() => setOpenEvidence((m) => ({ ...m, [f.id]: !evOpen }))}>
-                                  Evidence{f.evidence.length ? ` · ${f.evidence.length} quote${f.evidence.length === 1 ? "" : "s"}` : ""}{f.assessment.factors.length ? ` · ${f.assessment.factors.length} checks` : ""} <span className="frow-chev sm">▾</span>
-                                </button>
-                                {evOpen && (
-                                  <div className="nudge-ev">
-                                    {f.evidence.length === 0 && <div className="ev-empty">Inferred — no verbatim excerpt (the gap itself is the signal).</div>}
-                                    {f.evidence.map((q, i) => (
-                                      <div className="ev-line" key={i}>
-                                        <span className="ev-kind">{q.source}</span>
-                                        <span className="ev-quote">“{q.quote}”</span>
-                                      </div>
-                                    ))}
-                                    {f.assessment.factors.length > 0 && (
-                                      <div className="factors">
-                                        {f.assessment.factors.map((fac, i) => (
-                                          <div className={`factor fac-${fac.status}`} key={i}>
-                                            <span className="fac-dot">{fac.status === "strong" ? "✓" : fac.status === "moderate" ? "~" : "!"}</span>
-                                            <span className="fac-label">{fac.label}</span>
-                                            <span className="fac-detail">{fac.detail}</span>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
-                                    {f.assessment.caveats.length > 0 && (
-                                      <div className="counter">
-                                        <div className="counter-h">✓ Stress-tested against</div>
-                                        <ul>{f.assessment.caveats.map((c, i) => <li key={i}>{c}</li>)}</ul>
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </>
-                            )}
-
-                            <div className="frow-actions">
-                              {f.action && (
-                                <button className="promote" disabled={loading || !activeChat} onClick={() => respondFinding(f, "accepted")}>
-                                  {f.action.title}
-                                </button>
-                              )}
-                              <span className="frow-spacer" />
-                              <button className="ghost" onClick={() => setReasonOpenFor(reasonOpen ? null : f.id)}>Dismiss ▾</button>
-                            </div>
-                            {reasonOpen && (
-                              <div className="dismiss-reasons">
-                                <button onClick={() => respondFinding(f, "dismissed", "not-relevant")}>Not relevant</button>
-                                <button onClick={() => respondFinding(f, "dismissed", "wrong")}>This is wrong</button>
-                                <button onClick={() => respondFinding(f, "snoozed", "not-now")}>Not now</button>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  }
+                  if (it.t === "finding") return renderFindingRow(it.f);
                   if (it.t === "offer") {
                     const offer = it.offer;
                     return (

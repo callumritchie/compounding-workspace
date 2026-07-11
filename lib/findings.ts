@@ -286,6 +286,43 @@ async function detectUnansweredObjectives(project: string): Promise<RawFinding[]
   return out;
 }
 
+function safeJson<T>(raw: unknown, fallback: T): T {
+  if (typeof raw !== "string") return fallback;
+  try { return JSON.parse(raw) as T; } catch { return fallback; }
+}
+
+/* ---- Stored findings: the LLM-detected kinds (ungrounded-claim, contradiction) ---
+   Point-in-time judgements, so they persist rather than recompute. Written by the
+   chat + upload flows (below), read back here and merged into the same surface. */
+export function storeFinding(f: {
+  id: string; project: string; kind: FindingKind; title: string; detail: string;
+  evidence: FindingEvidence[]; confidence: number; urgency: number; trigger: string;
+  action?: { title: string; prompt: string };
+}): void {
+  getDb()
+    .prepare(
+      `INSERT OR REPLACE INTO stored_findings (id,project,kind,title,detail,evidence,confidence,urgency,trigger,action,ts,status)
+       VALUES (@id,@project,@kind,@title,@detail,@evidence,@confidence,@urgency,@trigger,@action,@ts,'open')`
+    )
+    .run({
+      id: f.id, project: f.project, kind: f.kind, title: f.title, detail: f.detail ?? "",
+      evidence: JSON.stringify(f.evidence ?? []), confidence: f.confidence, urgency: f.urgency,
+      trigger: f.trigger ?? "", action: f.action ? JSON.stringify(f.action) : null,
+      ts: new Date().toISOString(),
+    });
+}
+
+type StoredRow = { id: string; project: string; kind: string; title: string; detail: string | null; evidence: string | null; confidence: number; urgency: number; trigger: string | null; action: string | null };
+function readStoredFindings(project: string): RawFinding[] {
+  const rows = getDb().prepare("SELECT * FROM stored_findings WHERE project = ? AND status = 'open'").all(project) as StoredRow[];
+  return rows.map((r) => ({
+    id: r.id, project: r.project, kind: r.kind as FindingKind, title: r.title,
+    detail: r.detail ?? "", evidence: safeJson<FindingEvidence[]>(r.evidence, []),
+    confidence: r.confidence, urgency: r.urgency, trigger: r.trigger ?? "",
+    action: r.action ? safeJson<{ title: string; prompt: string } | undefined>(r.action, undefined) : undefined,
+  }));
+}
+
 const FRESH = 1; // findings are recomputed live; freshness is neutral for deterministic ones
 
 /* ---- buildFindings — assemble, gate, rank (mirror of buildInbox) ------------ */
@@ -297,6 +334,7 @@ export async function buildFindings(project: string, user: string): Promise<Proj
   const raw: RawFinding[] = [
     ...(await detectRisingRisk(project)),
     ...(await detectUnansweredObjectives(project)),
+    ...readStoredFindings(project), // LLM-detected: ungrounded-claim, contradiction
   ];
 
   const hidden = suppressedFor(project, user);
@@ -380,4 +418,94 @@ export async function generateFindingPreview(f: ProjectFinding, project: string)
   cache[f.id] = { sig, preview };
   await fs.writeFile(cacheFile, JSON.stringify(cache, null, 2), "utf8").catch(() => {});
   return preview;
+}
+
+function parseJson<T>(text: string, fallback: T): T {
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return fallback;
+  try { return JSON.parse(m[0]) as T; } catch { return fallback; }
+}
+
+/* ---- ungrounded-claim: the faithfulness judge, turned into a finding -----------
+   A RAG system fails silently — a confident answer the files don't support. We
+   already grade that (faithfulness.ts); here we route a clearly-ungrounded answer
+   into the same surface so it's caught before it lands in a deliverable. Called
+   fire-and-forget from the chat route, so it never slows a reply. */
+export async function detectUngroundedClaim(input: {
+  project: string;
+  question: string;
+  answer: string;
+  evidence: string; // the passages/files the agent actually saw this turn
+}): Promise<void> {
+  const { project, question, answer, evidence } = input;
+  // No retrieved evidence ⇒ nothing to check a corpus-claim against (the agent may
+  // have answered from memory, which is legitimately not a "§ says" claim). Stay quiet.
+  if (!evidence.trim() || answer.trim().length < 40) return;
+  const { judgeAnswer } = await import("./faithfulness");
+  const verdict = await judgeAnswer({ question, answer, evidence }).catch(() => null);
+  if (!verdict || verdict.faithfulness >= 0.6 || verdict.unsupported.length === 0) return;
+
+  const claim = verdict.unsupported[0];
+  const id = `uc:${project}:${createHash("sha1").update(claim).digest("hex").slice(0, 12)}`;
+  storeFinding({
+    id, project, kind: "ungrounded-claim",
+    title: "A recent answer made a claim the files don't support",
+    detail: `Faithfulness ${(verdict.faithfulness * 100).toFixed(0)}% on the last answer — verify before it lands in a deliverable.`,
+    evidence: verdict.unsupported.slice(0, 3).map((c) => ({ quote: c, source: "unsupported claim" })),
+    confidence: Math.min(0.85, 1 - verdict.faithfulness),
+    urgency: 0.7,
+    trigger: "The agent's last answer asserted something the retrieved files don't back up.",
+    action: { title: "Check this claim", prompt: `Earlier you stated: "${claim}". That doesn't appear grounded in the project files — re-check it against the corpus and correct or retract it, citing sources.` },
+  });
+}
+
+/* ---- contradiction: an upload that conflicts with what we recorded -------------
+   The highest-signal thing a new document can do is contradict a fact the team
+   holds. We compare it against the project/client/sector memory and flag direct
+   conflicts. Called fire-and-forget from the upload route. */
+export async function detectContradictions(project: string, file: string, content: string): Promise<void> {
+  if (!content.trim()) return;
+  const { readMemoriesInScope } = await import("./memory");
+  const cfg = await getProjectConfig(project);
+  const held: string[] = [];
+  for (const scope of [`project/${project}`, `client/${cfg.client}`, `sector/${cfg.sector}`]) {
+    const mems = await readMemoriesInScope(scope).catch(() => [] as { body: string; status?: string }[]);
+    for (const m of mems) if ((m.status ?? "active") !== "retracted") held.push(m.body);
+  }
+  const priors = held.slice(0, 15);
+  if (priors.length === 0) return;
+
+  const resp = await client.messages.create({
+    model: FAST_MODEL,
+    max_tokens: 500,
+    system:
+      "You compare a newly uploaded document against statements a consulting team currently holds true about its engagement. " +
+      "Identify only DIRECT factual contradictions — where the document clearly states something that CONFLICTS with a held " +
+      "statement. Ignore mere new information, elaboration, or a different topic. Return STRICT JSON: " +
+      `{"contradictions":[{"held":string,"quote":string,"note":string}]}. quote = a SHORT verbatim excerpt from the document; ` +
+      "note = one plain clause on the conflict. Empty array if none. JSON only, no preamble.",
+    messages: [
+      {
+        role: "user",
+        content: `Held statements:\n${priors.map((p, i) => `${i + 1}. ${p}`).join("\n")}\n\nNew document "${file}":\n${content.slice(0, 6000)}\n\nJSON:`,
+      },
+    ],
+  });
+  const parsed = parseJson<{ contradictions: { held: string; quote: string; note: string }[] }>(textOf(resp), { contradictions: [] });
+  for (const c of (parsed.contradictions ?? []).slice(0, 3)) {
+    if (!c?.held || !c?.quote) continue;
+    const id = `ct:${project}:${createHash("sha1").update(c.held + c.quote).digest("hex").slice(0, 12)}`;
+    storeFinding({
+      id, project, kind: "contradiction",
+      title: "A new upload contradicts what we recorded",
+      detail: (c.note || `"${file}" conflicts with a fact we hold.`).slice(0, 160),
+      evidence: [
+        { quote: c.held, source: "our record" },
+        { quote: c.quote, source: file },
+      ],
+      confidence: 0.72, urgency: 0.75,
+      trigger: `${file} states something that conflicts with a fact the team recorded.`,
+      action: { title: "Reconcile this", prompt: `The document "${file}" appears to contradict something we recorded. We hold: "${c.held}". The document says: "${c.quote}". Which is right, and what should we update?` },
+    });
+  }
 }

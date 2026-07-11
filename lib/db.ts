@@ -250,6 +250,28 @@ CREATE TABLE IF NOT EXISTS finding_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_finding_feedback_fid ON finding_feedback(finding_id);
 CREATE INDEX IF NOT EXISTS idx_finding_feedback_proj ON finding_feedback(project);
+
+-- STORED findings — the LLM-detected kinds (ungrounded-claim from the faithfulness
+-- judge on an answer; contradiction from an upload). Unlike the deterministic
+-- detectors (rising-risk / unanswered-objective, recomputed live from state), these
+-- are point-in-time judgements, so they're persisted with a stable id and merged
+-- into buildFindings alongside the live ones. Dismissal rides the same
+-- finding_feedback table, keyed by this id.
+CREATE TABLE IF NOT EXISTS stored_findings (
+  id         TEXT PRIMARY KEY,
+  project    TEXT NOT NULL,
+  kind       TEXT NOT NULL,                        -- ungrounded-claim | contradiction
+  title      TEXT NOT NULL,
+  detail     TEXT,
+  evidence   TEXT,                                 -- JSON [{quote,source}]
+  confidence REAL NOT NULL DEFAULT 0.6,
+  urgency    REAL NOT NULL DEFAULT 0.6,
+  trigger    TEXT,
+  action     TEXT,                                 -- JSON {title,prompt} or NULL
+  ts         TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'open'          -- open | superseded
+);
+CREATE INDEX IF NOT EXISTS idx_stored_findings_project ON stored_findings(project);
 `;
 
 // sqlite-vec takes an embedding as a JSON array string.
