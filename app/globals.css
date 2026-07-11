@@ -1004,3 +1004,13 @@ html, body {
 .sv-prop { border-left-color: var(--ink-3); }
 .sv-link { color: var(--ink); }
 .sv-link b { color: var(--accent); font-weight: 650; }
+
+/* Triangulated insight — the audit trail of connected signals + external context. */
+.tri-block { border-left-color: var(--accent); }
+.tri-trail { margin-top: 9px; padding: 9px 11px; background: var(--bg); border: 1px solid var(--hair); border-radius: var(--r-sm); }
+.tri-trail-h { font-family: var(--mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-3); }
+.tri-sig { display: grid; grid-template-columns: 118px 1fr; gap: 10px; margin-top: 6px; font-size: 12px; line-height: 1.45; }
+.tri-sig-kind { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .03em; color: var(--accent); padding-top: 1px; }
+.tri-sig-text { color: var(--ink); }
+.offer-web { margin-top: 9px; padding: 8px 10px; background: var(--surface-2); border: 1px dashed var(--border); border-radius: var(--r-sm); font-size: 12px; line-height: 1.5; color: var(--ink); }
+.offer-web-h { font-family: var(--mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-2); margin-right: 6px; }

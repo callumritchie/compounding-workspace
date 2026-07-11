@@ -127,6 +127,9 @@ export type Proposition = {
   confidence: number; // breadth of appetite
   urgency: number;
   stressTest: string[];
+  source?: "demand" | "delivery"; // demand = clients asking; delivery = firm's own recurring findings
+  soWhat?: string; // the concrete move (set on delivery-theme propositions)
+  webContext?: string; // optional 🌐 external market context
 };
 
 type Appetite = { text: string; evidence: string; client: string; sector: string; kind: string };

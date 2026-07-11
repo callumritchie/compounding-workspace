@@ -20,7 +20,8 @@ import { queryAtoms } from "./atoms";
 import { accountHealth, riskEarlyWarnings, deliveryHealth, mitigationPlaybook } from "./temporal";
 import { detectWhitespace } from "./whitespace";
 import { buildOffer, type Offer } from "../offers";
-import { buildFollowOns, buildPropositions, attachFollowOnLinks, type FollowOn, type Proposition } from "../followons";
+import { buildFollowOns, attachFollowOnLinks, type FollowOn, type Proposition } from "../followons";
+import { getDeepInsights, type TriangulatedInsight } from "../deep-insights";
 import { connectedSignals } from "./connected";
 
 export type SignalFamily =
@@ -28,6 +29,8 @@ export type SignalFamily =
   | "early-warning" | "delivery-health" | "risk-playbook" | "new-service-line"
   // Stakeholder-value families: a named follow-on opening + a broad firm proposition.
   | "follow-on" | "proposition"
+  // The latent layer: a non-obvious hypothesis triangulated across scattered signals.
+  | "triangulated"
   // Connected-workspace families (demo): sourced from mocked MCP connectors, not the corpus.
   | "pipeline" | "resourcing" | "pricing";
 
@@ -61,6 +64,7 @@ export type InboxSignal = {
   offer?: Offer; // new-service-line only: the priced, staffable Offer join (see lib/offers.ts)
   followOn?: FollowOn; // follow-on only: the named opening + adjacent move (see lib/followons.ts)
   proposition?: Proposition; // proposition only: the broad offering the firm could develop
+  triangulated?: TriangulatedInsight; // triangulated only: the non-obvious cross-signal hypothesis
 };
 
 const CONF_THRESHOLD = 0.6; // below this, a transcript-derived signal is "soft"
@@ -84,6 +88,9 @@ const VISIBILITY: Record<SignalFamily, (user: string) => boolean> = {
   // proposition is de-identified aggregate — both safe to surface broadly).
   "follow-on": () => true,
   proposition: () => true,
+  // Triangulated insights can synthesise from internal candour (delivery-risk atoms),
+  // so — like delivery-health — they stay with the lead rather than broadcast.
+  triangulated: (u) => canSeeDeliveryHealth(u),
   // Connected-workspace (demo) families ride the same open inbox as the rest.
   pipeline: () => true,
   resourcing: () => true,
@@ -215,12 +222,16 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
     });
   }
 
+  // The latent layer (cached): delivery-theme + demand propositions, and the deep
+  // triangulated hypotheses. Expensive (Opus + web) but disk-cached by signal hash.
+  // Never let its failure break the feed — degrade to no latent layer.
+  const deep = await getDeepInsights().catch(() => ({ triangulated: [] as TriangulatedInsight[], propositions: [] as Proposition[] }));
+
   // ---- Follow-on: a named opening on an existing account (single-account) --------
   // The warmest lead the firm has — a live buying signal, anchored to the sponsor
   // who voiced it and matched to the adjacent thing we already sell. A bespoke ask is
   // then LINKED to the firm-level proposition/priced offer it maps to (cross-altitude).
-  const propositions = await buildPropositions();
-  const followOns = await attachFollowOnLinks(await buildFollowOns(), propositions, offers);
+  const followOns = await attachFollowOnLinks(await buildFollowOns(), deep.propositions, offers);
   for (const f of followOns) {
     mk({
       id: f.id, family: "follow-on", route: "sales",
@@ -236,13 +247,17 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
   }
 
   // ---- Proposition: a broad offering the firm could develop (de-identified) -------
-  // One altitude above a single deal — recurring appetite across several clients that
-  // is worth packaging into a proposition, not just chasing one project at a time.
-  for (const p of propositions) {
+  // One altitude above a single deal. Two sources: DEMAND (clients keep asking) and
+  // DELIVERY (a pattern in what we keep finding across engagements — from emergent
+  // themes), each worth packaging rather than chasing one project at a time.
+  for (const p of deep.propositions) {
+    const detail = p.source === "delivery"
+      ? `Recurring across ${p.clients} of our engagements (${p.sectors.join(" · ")}) — package what we already do`
+      : `${p.clients} clients across ${p.sectors.join(" · ")} show appetite — an offering the firm could develop`;
     mk({
       id: p.id, family: "proposition", route: "leadership",
       title: `Proposition: ${p.label}`,
-      detail: `${p.clients} clients across ${p.sectors.join(" · ")} show appetite — an offering the firm could develop`,
+      detail,
       evidence: p.evidence,
       support: { sectors: p.sectors, count: p.clients },
       sector: p.sectors[0],
@@ -250,6 +265,25 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
       soft: false, deIdentified: true,
       actions: { draft: true, nominate: true },
       proposition: p,
+    });
+  }
+
+  // ---- Triangulated: the non-obvious hypothesis (the latent layer) ----------------
+  // Not a restated quote — an insight that only emerges from CONNECTING scattered
+  // signals across engagements or of different kinds. Surfaced as a hypothesis to
+  // investigate, carrying the exact signals it joined (the audit trail).
+  for (const t of deep.triangulated) {
+    mk({
+      id: t.id, family: "triangulated", route: "leadership",
+      title: t.insight,
+      detail: t.soWhat,
+      evidence: t.connected.map((c) => c.text),
+      support: { sectors: t.sectors, projects: t.projects, clients: t.deIdentified ? undefined : t.clients, count: t.connected.length },
+      sector: t.sectors[0],
+      confidence: t.confidence, urgency: t.kind === "risk" ? 0.75 : 0.5,
+      soft: false, deIdentified: t.deIdentified,
+      actions: { draft: true, nominate: true },
+      triangulated: t,
     });
   }
 

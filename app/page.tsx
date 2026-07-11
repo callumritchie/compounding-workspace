@@ -314,6 +314,7 @@ type InboxSignal = {
   offer?: Offer; // new-service-line only: the priced, staffable Offer join (lib/offers)
   followOn?: FollowOn; // follow-on only: named opening + adjacent move (lib/followons)
   proposition?: Proposition; // proposition only: broad offering the firm could develop
+  triangulated?: TriangulatedInsight; // triangulated only: cross-signal hypothesis
 };
 // Stakeholder-value plane (mirror of lib/followons).
 type FollowOnLink = { proposition: string; priceLow?: number; priceHigh?: number };
@@ -327,6 +328,14 @@ type FollowOn = {
 type Proposition = {
   id: string; theme: string; label: string; clients: number; sectors: string[];
   evidence: string[]; confidence: number; urgency: number; stressTest: string[];
+  source?: "demand" | "delivery"; soWhat?: string; webContext?: string;
+};
+type ConnectedSignal = { ref: string; type: string; project: string; sector: string; text: string };
+type TriangulatedInsight = {
+  id: string; insight: string; why: string; soWhat: string;
+  kind: "risk" | "opportunity" | "positioning" | "delivery";
+  connected: ConnectedSignal[]; projects: string[]; clients: string[]; sectors: string[];
+  confidence: number; deIdentified: boolean; webContext?: string;
 };
 // The Offer join (mirror of lib/offers): whitespace demand × pricing × staffing.
 type OfferPrice = { low: number; high: number; median: number; margin: number; bookMargin: number; comparables: number } | null;
@@ -1040,6 +1049,7 @@ export default function Home() {
   function signalBucket(s: InboxSignal): "risk" | "opp" | "fyi" {
     if (s.soft) return "fyi";
     if (["churn", "early-warning", "delivery-health"].includes(s.family)) return "risk";
+    if (s.family === "triangulated") return s.triangulated?.kind === "risk" ? "risk" : "opp";
     if (["buying", "competitive", "new-service-line", "follow-on", "proposition"].includes(s.family)) return "opp";
     return "fyi";
   }
@@ -1163,31 +1173,77 @@ export default function Home() {
     );
   }
 
-  // Proposition block — one altitude up: not a deal but an offering to develop,
-  // grounded in appetite recurring across several clients (de-identified).
+  // Proposition block — one altitude up: not a deal but an offering to develop.
+  // Two sources: DEMAND (clients keep asking) or DELIVERY (a pattern in what we keep
+  // finding across engagements). Web context enriches the top one.
   function renderPropositionBlock(p: Proposition) {
+    const delivery = p.source === "delivery";
     return (
       <div className="offer sv-block sv-prop">
         <div className="offer-h">
           <span className="offer-badge">🧭 Proposition</span>
-          <span className="offer-sub">appetite across the book — an offering to build</span>
+          <span className="offer-sub">{delivery ? "recurring in our delivery — an offering to package" : "appetite across the book — an offering to build"}</span>
         </div>
         <div className="offer-grid">
           <div className="offer-leg">
-            <span className="offer-k">Appetite</span>
-            <span className="offer-v"><b>{p.clients}</b> clients · {p.sectors.join(" · ")}</span>
+            <span className="offer-k">{delivery ? "Seen in" : "Appetite"}</span>
+            <span className="offer-v"><b>{p.clients}</b> {delivery ? "engagements" : "clients"} · {p.sectors.join(" · ")}</span>
           </div>
           <div className="offer-leg">
             <span className="offer-k">Develop</span>
-            <span className="offer-v">Package a repeatable offering around this recurring demand.</span>
+            <span className="offer-v">{p.soWhat ? <b>{p.soWhat}</b> : "Package a repeatable offering around this recurring demand."}</span>
           </div>
         </div>
+        {p.webContext && (
+          <div className="offer-web"><span className="offer-web-h">🌐 external</span> {p.webContext}</div>
+        )}
         {p.stressTest.length > 0 && (
           <div className="offer-stress">
             <span className="offer-stress-h">⚠ before you build</span>
             <ul>{p.stressTest.map((t, i) => <li key={i}>{t}</li>)}</ul>
           </div>
         )}
+      </div>
+    );
+  }
+
+  // Triangulated block — the latent layer. The insight is in the TITLE; here we show
+  // HOW it was reached: the exact scattered signals it connected (the audit trail
+  // that keeps it honest), the "so what", any external context, and — always — the
+  // reminder that it's an inferred hypothesis, not a stated finding.
+  function renderTriangulatedBlock(t: TriangulatedInsight) {
+    return (
+      <div className="offer sv-block tri-block">
+        <div className="offer-h">
+          <span className="offer-badge">🔗 Triangulated</span>
+          <span className="offer-sub">connects {t.connected.length} signals across {t.projects.length} engagement{t.projects.length === 1 ? "" : "s"} — a hypothesis, not a fact</span>
+        </div>
+        <div className="offer-grid">
+          <div className="offer-leg">
+            <span className="offer-k">Why</span>
+            <span className="offer-v">{t.why}</span>
+          </div>
+          <div className="offer-leg">
+            <span className="offer-k">So what</span>
+            <span className="offer-v"><b>{t.soWhat}</b></span>
+          </div>
+        </div>
+        <div className="tri-trail">
+          <div className="tri-trail-h">Triangulated from — none of these says it alone</div>
+          {t.connected.map((c, i) => (
+            <div className="tri-sig" key={i}>
+              <span className="tri-sig-kind">{c.type}{t.deIdentified ? ` · ${c.sector}` : ` · ${c.project}`}</span>
+              <span className="tri-sig-text">{c.text}</span>
+            </div>
+          ))}
+        </div>
+        {t.webContext && (
+          <div className="offer-web"><span className="offer-web-h">🌐 external</span> {t.webContext}</div>
+        )}
+        <div className="offer-stress">
+          <span className="offer-stress-h">⚠ hypothesis — validate before acting</span>
+          <ul><li>Inferred by connecting signals, not stated by any of them — treat it as a lead to test, not a finding.</li></ul>
+        </div>
       </div>
     );
   }
@@ -1230,6 +1286,7 @@ export default function Home() {
         {s.offer && renderOfferBlock(s.offer)}
         {s.followOn && renderFollowOnBlock(s.followOn)}
         {s.proposition && renderPropositionBlock(s.proposition)}
+        {s.triangulated && renderTriangulatedBlock(s.triangulated)}
 
         <div className="conf-row">
           <span className={`conf-badge conf-${cm.level}`}><span className="conf-meter">{cm.meter}</span> {cm.label}</span>
@@ -1357,6 +1414,7 @@ export default function Home() {
       "new-service-line": { icon: "🌱", label: "new service line" },
       "follow-on": { icon: "🤝", label: "follow-on" },
       proposition: { icon: "🧭", label: "proposition" },
+      triangulated: { icon: "🔗", label: "triangulated" },
       pipeline: { icon: "📊", label: "pipeline" },
       resourcing: { icon: "🧑‍💼", label: "resourcing" },
       pricing: { icon: "💷", label: "pricing" },
@@ -1401,6 +1459,7 @@ export default function Home() {
       pipeline: { label: "Pipeline", kind: "opp", order: 1.5 },
       "new-service-line": { label: "Expand the offer", kind: "opp", order: 2 },
       proposition: { label: "New proposition", kind: "opp", order: 2.2 },
+      triangulated: { label: "Triangulated insight", kind: "opp", order: 2.4 },
       pricing: { label: "Pricing & margin", kind: "opp", order: 2.5 },
       competitive: { label: "Competitive", kind: "deliv", order: 3 },
       objection: { label: "Objection / positioning", kind: "deliv", order: 4 },
