@@ -227,6 +227,29 @@ CREATE TABLE IF NOT EXISTS signal_annotations (
   status    TEXT NOT NULL DEFAULT 'active'          -- active | withdrawn
 );
 CREATE INDEX IF NOT EXISTS idx_annotations_signal ON signal_annotations(signal_id);
+
+-- In-project FINDINGS feedback (the proactive "Findings" surface). Findings are
+-- recomputed on demand from the engagement's own state, so — like the annotations
+-- above — feedback is keyed by the finding's STABLE id (e.g. 'rr:acme-health:budget')
+-- and read back at build time. This is what makes a dismiss actually stick (the old
+-- inbox dismiss was a no-op on derived signals) and what lets the surface LEARN:
+--   • dismissed  + reason 'wrong'        → retire the finding for the whole team
+--   • dismissed  + reason 'not-relevant' → mute it for this user (and its class)
+--   • snoozed    ('not-now')             → hide until snooze_until, then re-surface
+--   • accepted / saved                   → positive signal the ranker reinforces
+CREATE TABLE IF NOT EXISTS finding_feedback (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  finding_id   TEXT NOT NULL,                        -- stable finding id
+  kind         TEXT NOT NULL,                        -- finding kind (for class-level learning)
+  project      TEXT,
+  actor        TEXT NOT NULL,
+  response     TEXT NOT NULL,                        -- accepted | saved | dismissed | snoozed
+  reason       TEXT,                                 -- not-relevant | wrong | not-now (on dismiss/snooze)
+  snooze_until TEXT,                                 -- ISO — set when response = 'snoozed'
+  ts           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_finding_feedback_fid ON finding_feedback(finding_id);
+CREATE INDEX IF NOT EXISTS idx_finding_feedback_proj ON finding_feedback(project);
 `;
 
 // sqlite-vec takes an embedding as a JSON array string.

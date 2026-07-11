@@ -769,6 +769,63 @@ html, body {
 }
 .nudge-more:hover { border-color: var(--accent); color: var(--accent); }
 
+/* Findings in the nudge — the "quiet ledger + hook". Collapsed, a finding is ONE
+   calm line (kind stripe · gist · confidence meter · chevron); depth reveals on
+   intent: why-now → a draft teaser that opens the draft → evidence. All from tokens. */
+.finding-row { border: 1px solid var(--hair); border-radius: 9px; background: var(--bg); overflow: hidden; }
+.finding-row.open { background: var(--surface); border-color: var(--border); }
+.frow-head { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; background: none; border: 0; padding: 9px 11px; cursor: pointer; color: inherit; font-family: inherit; }
+.frow-head:hover { background: var(--surface-2); }
+.frow-stripe { width: 3px; align-self: stretch; min-height: 16px; border-radius: 100px; flex: none; }
+.frow-stripe.kind-risk { background: var(--risk); }
+.frow-stripe.kind-deliv { background: var(--delivery); }
+.frow-title { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.35; color: var(--ink); font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.finding-row.open .frow-title { white-space: normal; }
+.frow-meter { flex: none; font-family: var(--mono); font-size: 11px; letter-spacing: 1px; color: var(--ink-2); }
+.frow-chev { flex: none; font-size: 10px; color: var(--ink-3); transition: transform .2s ease; }
+.frow-chev.sm { font-size: 9px; }
+.frow-head[aria-expanded="true"] .frow-chev, .frow-link[aria-expanded="true"] .frow-chev { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) { .frow-chev { transition: none; } }
+.frow-drawer { padding: 2px 12px 12px 23px; display: flex; flex-direction: column; gap: 10px; }
+.frow-why { font-size: 12px; line-height: 1.45; color: var(--ink-2); }
+
+/* The folded-in hook: a draft teaser (accent spark) that opens to the full draft. */
+.frow-teaser { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; background: var(--surface-2); border: 1px solid var(--hair-2); border-radius: var(--r-sm); padding: 8px 10px; cursor: pointer; color: inherit; font-family: inherit; }
+.frow-teaser:hover { border-color: var(--accent); }
+.frow-spark { flex: none; color: var(--accent); font-size: 12px; }
+.frow-teaser-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.frow-teaser-k { font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+.frow-teaser-peek { font-size: 11.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.frow-teaser-peek.dim { color: var(--ink-3); font-style: italic; }
+.frow-go { flex: none; color: var(--ink-3); font-size: 12px; }
+.frow-teaser:hover .frow-go { color: var(--accent); }
+.frow-draft { background: var(--surface-2); border: 1px solid var(--hair-2); border-radius: var(--r-sm); padding: 9px 11px; display: flex; flex-direction: column; gap: 8px; }
+.frow-draft.dim { color: var(--ink-3); font-family: var(--mono); font-size: 11px; }
+.frow-draft .draft-body { font-size: 12.5px; line-height: 1.5; color: var(--ink-2); white-space: pre-wrap; }
+.frow-save { align-self: flex-start; font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); border: 1px solid var(--hair); background: var(--surface); border-radius: var(--r-sm); padding: 4px 9px; cursor: pointer; }
+.frow-save:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Evidence link + trail (trail atoms reused from the insight card). */
+.frow-link { align-self: flex-start; font-family: var(--mono); font-size: 11px; color: var(--ink-2); background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.frow-link:hover { color: var(--accent); }
+.nudge-ev { display: flex; flex-direction: column; gap: 8px; }
+.nudge-ev .factors { grid-template-columns: 1fr; gap: 4px; }
+.nudge-ev .counter { margin-top: 2px; }
+
+.frow-actions { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.frow-spacer { flex: 1; }
+.frow-actions .promote { padding: 5px 12px; }
+.frow-actions .ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
+.frow-actions .ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+.dismiss-reasons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; padding-top: 8px; border-top: 1px solid var(--hair); }
+.dismiss-reasons button {
+  font-family: var(--mono); font-size: 11px; color: var(--ink-2);
+  border: 1px solid var(--hair); background: var(--surface); border-radius: var(--r-sm); padding: 4px 9px; cursor: pointer;
+}
+.dismiss-reasons button:hover { border-color: var(--accent); color: var(--accent); }
+.nudge-saved { font-family: var(--mono); font-size: 10.5px; color: var(--good); }
+
 /* ===========================================================================
    Interrogate — evidence-first cross-project intelligence (redesign v2).
    Built on the shared tokens. Ask (pull) → Surfaced feed (push, uncapped,

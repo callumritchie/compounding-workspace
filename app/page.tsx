@@ -315,6 +315,25 @@ type InboxSignal = {
 // Auditable confidence: the real drivers behind a rating + the counter-check.
 type ConfFactor = { label: string; status: "strong" | "moderate" | "weak"; detail: string };
 type SignalAssessment = { band: "high" | "medium" | "low"; factors: ConfFactor[]; caveats: string[] };
+// An in-project FINDING (mirror of lib/findings): a detected, evidence-anchored
+// observation about THIS engagement — the grounded replacement for the old
+// generative offer nudge. Carries verbatim provenance + an auditable confidence read.
+type ProjectFinding = {
+  id: string;
+  project: string;
+  kind: "rising-risk" | "unanswered-objective" | "ungrounded-claim" | "contradiction";
+  title: string;
+  detail: string;
+  evidence: { quote: string; source: string }[];
+  confidence: number;
+  urgency: number;
+  trigger: string; // "why now"
+  score: number;
+  action?: { title: string; prompt: string };
+  assessment: SignalAssessment;
+};
+// A finding's cheap DRAFT starter (the "already did a bit for you" proof-of-value).
+type FindingPreview = { heading: string; body: string };
 // The shared human layer over a surfaced insight (mirror of lib/signals/annotations).
 type Annotation = { id: number; signalId: string; author: string; kind: "context" | "correction" | "nullify"; body: string; ts: string };
 type AnnotationRollup = { notes: Annotation[]; count: number; nullified: boolean; nullifiedBy?: string; nullifyReason?: string };
@@ -378,6 +397,20 @@ export default function Home() {
   // forget so it never blocks a turn; refreshed as the engagement moves.
   const [nextActions, setNextActions] = useState<NextActions | null>(null);
   const [compassDismissed, setCompassDismissed] = useState(false);
+  // Findings: the grounded, evidence-anchored flags for THIS engagement (the
+  // replacement for the generative offer), loaded on the same triggers as the Compass.
+  const [findings, setFindings] = useState<ProjectFinding[]>([]);
+  // A finding discloses in tiers (the "quiet ledger + hook" design): the row opens to
+  // a drawer, the draft teaser opens to the full draft, evidence opens to the trail.
+  const [openFinding, setOpenFinding] = useState<Record<string, boolean>>({});
+  const [openDraft, setOpenDraft] = useState<Record<string, boolean>>({});
+  const [openEvidence, setOpenEvidence] = useState<Record<string, boolean>>({});
+  const [reasonOpenFor, setReasonOpenFor] = useState<string | null>(null);
+  // The draft preview per finding ("loading" while it's being written, null if none),
+  // and where a saved preview landed in the corpus. previewFetched dedupes fetches.
+  const [findingPreview, setFindingPreview] = useState<Record<string, FindingPreview | "loading" | null>>({});
+  const [savedFinding, setSavedFinding] = useState<Record<string, string>>({});
+  const previewFetched = useRef<Set<string>>(new Set());
   // Engagement strip: the standing constraints (phase · budget · next milestone ·
   // top risk) shown at the top of the chat column. Loaded from /api/engagement.
   const [engagement, setEngagement] = useState<EngSummary | null>(null);
@@ -583,6 +616,71 @@ export default function Home() {
       .catch(() => {});
   }
 
+  // Load the grounded Findings for this engagement (rising risk, unanswered
+  // objectives, …). Detected from the project's own state — not generated — so each
+  // carries verbatim evidence + an auditable confidence read. Dismissals persist
+  // server-side, so what comes back is already filtered to what THIS user hasn't
+  // retired. Fire-and-forget, like the Compass.
+  function loadFindings() {
+    fetch(`/api/findings?project=${project}&user=${user}`)
+      .then((r) => r.json())
+      .then((d) => setFindings(Array.isArray(d?.findings) ? d.findings : []))
+      .catch(() => setFindings([]));
+  }
+
+  // Respond to a finding. Every response persists server-side keyed by the finding's
+  // stable id, so it survives the next recompute (the fix for the old no-op dismiss)
+  // — and feeds the ranker later. "accepted" also sends the finding's action prompt.
+  function respondFinding(
+    f: ProjectFinding,
+    response: "accepted" | "dismissed" | "snoozed",
+    reason?: "not-relevant" | "wrong" | "not-now"
+  ) {
+    setPopupDismissed((s) => ({ ...s, [f.id]: true }));
+    setReasonOpenFor(null);
+    fetch("/api/findings/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: f.id, kind: f.kind, project, user, response, reason }),
+    }).catch(() => {});
+    if (response === "accepted" && f.action) sendText(f.action.prompt);
+  }
+
+  // Open/close a finding's drawer. Opening lazily fetches its draft preview, so the
+  // "already started" teaser is ready without paying for it on findings that stay shut.
+  function toggleFinding(f: ProjectFinding) {
+    const willOpen = !openFinding[f.id];
+    setOpenFinding((m) => ({ ...m, [f.id]: willOpen }));
+    if (willOpen) loadPreview(f);
+  }
+
+  // Fetch a finding's draft preview (server-cached). Marked fetched so we ask once.
+  function loadPreview(f: ProjectFinding) {
+    if (previewFetched.current.has(f.id)) return;
+    previewFetched.current.add(f.id);
+    setFindingPreview((m) => ({ ...m, [f.id]: "loading" }));
+    fetch("/api/findings/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project, user, id: f.id }),
+    })
+      .then((r) => r.json())
+      .then((d) => setFindingPreview((m) => ({ ...m, [f.id]: d?.preview ?? null })))
+      .catch(() => setFindingPreview((m) => ({ ...m, [f.id]: null })));
+  }
+  // Save a finding's draft into the project corpus (and index it). Records 'saved',
+  // which the ranker reads as a positive signal.
+  function saveFinding(f: ProjectFinding, p: FindingPreview) {
+    fetch("/api/findings/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project, user, id: f.id, kind: f.kind, heading: p.heading, body: p.body }),
+    })
+      .then((r) => r.json())
+      .then((d) => { if (d?.path) setSavedFinding((m) => ({ ...m, [f.id]: d.path })); })
+      .catch(() => {});
+  }
+
   // Refresh the Compass whenever the engagement state has actually moved: a chat
   // is opened with content, or a turn just finished (messages.length grows). Gated
   // on !loading so it never fires mid-turn. Grounding it in messages.length is what
@@ -591,6 +689,14 @@ export default function Home() {
     if (activeChat && messages.length > 0 && !loading) loadNextActions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChat, project, user, messages.length, loading]);
+
+  // Findings track the engagement's underlying state (files + risk register), not
+  // the chat, so refresh on project open, after a turn, and after an upload.
+  useEffect(() => {
+    if (view === "project" && !loading) loadFindings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, user, view, messages.length, loading]);
+
 
   // ---- Bottom-right nudge: the items the agent wants the user to see ----
   // Built once here so the auto-collapse effect and the popup render agree. The
@@ -603,12 +709,18 @@ export default function Home() {
     !!offer &&
     ((nextActions?.actions ?? []).some((a) => a.prompt === offer.prompt || a.title === offer.title) ||
       (offer.title.length > 3 && lastReply.toLowerCase().includes(offer.title.toLowerCase())));
-  const showOffer = !!offer && !popupDismissed[offerId] && !offerEchoes;
+  // Findings come first — they're the grounded flags. The generative offer is now
+  // only a FALLBACK: if any finding is showing, we suppress the offer entirely
+  // (a detected, evidence-backed flag always beats an invented suggestion).
+  const liveFindings = findings.filter((f) => !popupDismissed[f.id]);
+  const showOffer = !!offer && !popupDismissed[offerId] && !offerEchoes && liveFindings.length === 0;
   const nudgeItems: Array<
+    | { t: "finding"; id: string; f: ProjectFinding }
     | { t: "offer"; id: string; offer: NextAction }
     | { t: "prop"; id: string; p: Proposal }
     | { t: "nom"; id: string; n: Nomination }
   > = [
+    ...liveFindings.map((f) => ({ t: "finding" as const, id: f.id, f })),
     ...(showOffer && offer ? [{ t: "offer" as const, id: offerId, offer }] : []),
     ...proposals.filter((p) => !popupDismissed[p.id]).map((p) => ({ t: "prop" as const, id: p.id, p })),
     ...nominations.filter((n) => !popupDismissed[n.id]).map((n) => ({ t: "nom" as const, id: n.id, n })),
@@ -2426,6 +2538,121 @@ export default function Home() {
             {!popupCollapsed && (
               <div className="nudge-body">
                 {shown.map((it) => {
+                  if (it.t === "finding") {
+                    const f = it.f;
+                    const cm = confMeta(f.confidence);
+                    const km =
+                      f.kind === "rising-risk"
+                        ? { label: "Risk escalating", cls: "risk" }
+                        : f.kind === "unanswered-objective"
+                        ? { label: "Objective gap", cls: "deliv" }
+                        : { label: "Flag", cls: "deliv" };
+                    const open = !!openFinding[f.id];
+                    const draftOpen = !!openDraft[f.id];
+                    const evOpen = !!openEvidence[f.id];
+                    const reasonOpen = reasonOpenFor === f.id;
+                    const pv = findingPreview[f.id];
+                    const saved = savedFinding[f.id];
+                    const teaserLabel = f.kind === "unanswered-objective" ? "What would close it" : "Starter mitigation ready";
+                    const hasChecks = f.evidence.length > 0 || f.assessment.factors.length > 0;
+                    return (
+                      <div key={it.id} className={`finding-row kind-${km.cls} ${open ? "open" : ""}`}>
+                        {/* Collapsed: one calm line — kind stripe · gist · confidence · chevron. */}
+                        <button className="frow-head" aria-expanded={open} onClick={() => toggleFinding(f)}>
+                          <span className={`frow-stripe kind-${km.cls}`} />
+                          <span className="frow-title">{f.title}</span>
+                          <span className="frow-meter conf-meter" title={`${km.label} · ${cm.label}`}>{cm.meter}</span>
+                          <span className="frow-chev">▾</span>
+                        </button>
+                        {open && (
+                          <div className="frow-drawer">
+                            <div className="frow-why">{f.trigger}</div>
+
+                            {/* The hook, folded in: a draft teaser that opens to the full draft. */}
+                            {f.action && (
+                              <>
+                                <button className="frow-teaser" aria-expanded={draftOpen} onClick={() => setOpenDraft((m) => ({ ...m, [f.id]: !draftOpen }))}>
+                                  <span className="frow-spark">✦</span>
+                                  <span className="frow-teaser-txt">
+                                    <span className="frow-teaser-k">{teaserLabel}</span>
+                                    {pv && pv !== "loading" && !draftOpen && <span className="frow-teaser-peek">{pv.body.replace(/\n+/g, " ")}</span>}
+                                    {(pv === "loading" || pv === undefined) && !draftOpen && <span className="frow-teaser-peek dim">drafting…</span>}
+                                  </span>
+                                  <span className="frow-go">{draftOpen ? "▾" : "→"}</span>
+                                </button>
+                                {draftOpen && (pv === "loading" || pv === undefined) && <div className="frow-draft dim">drafting a starter…</div>}
+                                {draftOpen && pv === null && <div className="frow-draft dim">No draft for this finding.</div>}
+                                {draftOpen && pv && pv !== "loading" && (
+                                  <div className="frow-draft">
+                                    <div className="draft-body">{pv.body}</div>
+                                    {saved ? (
+                                      <div className="nudge-saved">✓ Saved to {saved}</div>
+                                    ) : (
+                                      <button className="frow-save" onClick={() => saveFinding(f, pv)}>Save to project</button>
+                                    )}
+                                  </div>
+                                )}
+                              </>
+                            )}
+
+                            {/* Evidence, on demand. */}
+                            {hasChecks && (
+                              <>
+                                <button className="frow-link" aria-expanded={evOpen} onClick={() => setOpenEvidence((m) => ({ ...m, [f.id]: !evOpen }))}>
+                                  Evidence{f.evidence.length ? ` · ${f.evidence.length} quote${f.evidence.length === 1 ? "" : "s"}` : ""}{f.assessment.factors.length ? ` · ${f.assessment.factors.length} checks` : ""} <span className="frow-chev sm">▾</span>
+                                </button>
+                                {evOpen && (
+                                  <div className="nudge-ev">
+                                    {f.evidence.length === 0 && <div className="ev-empty">Inferred — no verbatim excerpt (the gap itself is the signal).</div>}
+                                    {f.evidence.map((q, i) => (
+                                      <div className="ev-line" key={i}>
+                                        <span className="ev-kind">{q.source}</span>
+                                        <span className="ev-quote">“{q.quote}”</span>
+                                      </div>
+                                    ))}
+                                    {f.assessment.factors.length > 0 && (
+                                      <div className="factors">
+                                        {f.assessment.factors.map((fac, i) => (
+                                          <div className={`factor fac-${fac.status}`} key={i}>
+                                            <span className="fac-dot">{fac.status === "strong" ? "✓" : fac.status === "moderate" ? "~" : "!"}</span>
+                                            <span className="fac-label">{fac.label}</span>
+                                            <span className="fac-detail">{fac.detail}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                    {f.assessment.caveats.length > 0 && (
+                                      <div className="counter">
+                                        <div className="counter-h">✓ Stress-tested against</div>
+                                        <ul>{f.assessment.caveats.map((c, i) => <li key={i}>{c}</li>)}</ul>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </>
+                            )}
+
+                            <div className="frow-actions">
+                              {f.action && (
+                                <button className="promote" disabled={loading || !activeChat} onClick={() => respondFinding(f, "accepted")}>
+                                  {f.action.title}
+                                </button>
+                              )}
+                              <span className="frow-spacer" />
+                              <button className="ghost" onClick={() => setReasonOpenFor(reasonOpen ? null : f.id)}>Dismiss ▾</button>
+                            </div>
+                            {reasonOpen && (
+                              <div className="dismiss-reasons">
+                                <button onClick={() => respondFinding(f, "dismissed", "not-relevant")}>Not relevant</button>
+                                <button onClick={() => respondFinding(f, "dismissed", "wrong")}>This is wrong</button>
+                                <button onClick={() => respondFinding(f, "snoozed", "not-now")}>Not now</button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
                   if (it.t === "offer") {
                     const offer = it.offer;
                     return (
