@@ -13,7 +13,7 @@ export async function POST(req: Request) {
   const signalId = typeof body?.signalId === "string" ? body.signalId.trim() : "";
   const note = typeof body?.body === "string" ? body.body.trim() : "";
   const kind: AnnotationKind =
-    body?.kind === "correction" ? "correction" : body?.kind === "nullify" ? "nullify" : "context";
+    body?.kind === "correction" ? "correction" : body?.kind === "nullify" ? "nullify" : body?.kind === "comment" ? "comment" : "context";
 
   if (!isUser(user)) return Response.json({ error: "unknown user" }, { status: 400 });
   if (!signalId) return Response.json({ error: "missing signalId" }, { status: 400 });

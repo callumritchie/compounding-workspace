@@ -27,11 +27,19 @@ export type DocProvenance = {
 const STALE_MONTHS = 18; // content older than this is flagged stale
 const MS_PER_MONTH = 30 * 86_400_000;
 
+// YAML frontmatter auto-parses `authored: 2023-02-01` into a Date object (JSON keeps
+// it a string) — accept both, or the date silently reads as "undated".
+function asDateString(v: unknown): string | undefined {
+  if (typeof v === "string") return v;
+  if (v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString();
+  return undefined;
+}
+
 // Read provenance from a file's parsed frontmatter (gray-matter `data`). Sensible
 // defaults: unmarked docs are treated as firm-produced (our workspace), undated.
 export function docProvenance(fm: Record<string, unknown> = {}): DocProvenance {
   const origin: Origin = fm.origin === "client" ? "client" : fm.origin === "external" ? "external" : "firm";
-  const authored = typeof fm.authored === "string" ? fm.authored : typeof fm.date === "string" ? fm.date : undefined;
+  const authored = asDateString(fm.authored) ?? asDateString(fm.date);
   return {
     origin,
     authored,

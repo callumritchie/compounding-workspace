@@ -316,6 +316,9 @@ type InboxSignal = {
   proposition?: Proposition; // proposition only: broad offering the firm could develop
   triangulated?: TriangulatedInsight; // triangulated only: cross-signal hypothesis
   convergence?: ConvergenceInsight; // convergence only: independent modalities agreeing
+  state?: { state: "owned" | "resolved" | "snoozed" | "reopened"; actor: string; ts: string }; // lifecycle
+  aged?: boolean; // stale + low-value + untouched → folded away
+  clarify?: { q: string; why: string }[]; // 1–3 questions whose answers would firm this up
 };
 // Stakeholder-value plane (mirror of lib/followons).
 type FollowOnLink = { proposition: string; priceLow?: number; priceHigh?: number };
@@ -382,8 +385,9 @@ type ProjectFinding = {
 // A finding's cheap DRAFT starter (the "already did a bit for you" proof-of-value).
 type FindingPreview = { heading: string; body: string };
 // The shared human layer over a surfaced insight (mirror of lib/signals/annotations).
-type Annotation = { id: number; signalId: string; author: string; kind: "context" | "correction" | "nullify"; body: string; ts: string };
-type AnnotationRollup = { notes: Annotation[]; count: number; nullified: boolean; nullifiedBy?: string; nullifyReason?: string };
+type AnnKind = "context" | "correction" | "nullify" | "comment";
+type Annotation = { id: number; signalId: string; author: string; kind: AnnKind; body: string; ts: string };
+type AnnotationRollup = { notes: Annotation[]; refinements: Annotation[]; comments: Annotation[]; count: number; nullified: boolean; nullifiedBy?: string; nullifyReason?: string };
 type ImpactStats = {
   totalReuses: number;
   distinctInsights: number;
@@ -504,8 +508,11 @@ export default function Home() {
   const [expandedSig, setExpandedSig] = useState<Record<string, boolean>>({});
   const [noteOpenFor, setNoteOpenFor] = useState<string | null>(null);
   const [noteText, setNoteText] = useState("");
-  const [noteKind, setNoteKind] = useState<"context" | "correction" | "nullify">("context");
+  const [noteKind, setNoteKind] = useState<AnnKind>("context");
+  const [composerMode, setComposerMode] = useState<"refine" | "discuss">("refine");
   const [notePosting, setNotePosting] = useState(false);
+  const [clarifyFor, setClarifyFor] = useState<string | null>(null); // "signalId::questionIndex"
+  const [clarifyText, setClarifyText] = useState("");
   // Bottom-right proactive popup: which items the user has dismissed this session
   // (keyed by a stable id), and whether the whole popup is collapsed.
   const [popupDismissed, setPopupDismissed] = useState<Record<string, boolean>>({});
@@ -1034,7 +1041,40 @@ export default function Home() {
   // nullification. Persisted server-side and visible to the whole team; a nullify
   // retires the insight for everyone (kept with author + reason). Optimistically
   // merges the returned rollup so the thread updates without a full reload.
-  async function annotateSignal(signalId: string, kind: "context" | "correction" | "nullify", text: string) {
+  // Move an insight through its lifecycle (own / resolve / snooze / reopen). Shared.
+  async function setSignalLifecycle(s: InboxSignal, state: "owned" | "resolved" | "snoozed" | "reopened") {
+    await fetch("/api/signals/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user, signalId: s.id, state, snoozeDays: state === "snoozed" ? 14 : undefined }),
+    }).catch(() => {});
+    // Resolve/snooze remove it from the active feed; own updates the badge in place.
+    if (state === "resolved" || state === "snoozed") {
+      setInboxSignals((xs) => (xs ?? []).filter((x) => x.id !== s.id));
+    } else {
+      setInboxSignals((xs) => (xs ?? []).map((x) => (x.id === s.id ? { ...x, state: { state, actor: user, ts: new Date().toISOString() } } : x)));
+    }
+  }
+
+  // Answer a clarifying question → recorded as a refinement (context) on the insight.
+  async function answerClarify(signalId: string, question: string, answer: string) {
+    const body = `Q: ${question}\nA: ${answer.trim()}`;
+    if (!answer.trim() || notePosting) return;
+    setNotePosting(true);
+    try {
+      const d = await fetch("/api/signals/annotate", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user, signalId, kind: "context", body }),
+      }).then((r) => r.json());
+      if (d?.rollup) setAnnById((m) => ({ ...m, [signalId]: d.rollup }));
+      setClarifyFor(null);
+      setClarifyText("");
+    } finally {
+      setNotePosting(false);
+    }
+  }
+
+  async function annotateSignal(signalId: string, kind: AnnKind, text: string) {
     const body = text.trim();
     if (!body || notePosting) return;
     setNotePosting(true);
@@ -1292,12 +1332,15 @@ export default function Home() {
     const kind = groupMeta(s.family).kind;
     const roll = annById[s.id];
     const notes = roll?.notes ?? [];
+    const refinements = roll?.refinements ?? notes.filter((n) => n.kind !== "comment");
+    const comments = roll?.comments ?? notes.filter((n) => n.kind === "comment");
     const nullified = roll?.nullified ?? false;
+    const owned = s.state?.state === "owned";
     const open = !!expandedSig[s.id];
     const composerOpen = noteOpenFor === s.id;
     const rationale = confRationale(s);
     return (
-      <div key={s.id} className={`insight kind-${kind} ${nullified ? "retired" : ""}`}>
+      <div key={s.id} className={`insight kind-${kind} ${nullified ? "retired" : ""} ${s.aged ? "aged" : ""} ${owned ? "owned" : ""}`}>
         {nullified && (
           <div className="insight-retired-banner">
             ⦸ Retired by {USER_NAMES[roll!.nullifiedBy ?? ""] ?? roll!.nullifiedBy}
@@ -1306,6 +1349,8 @@ export default function Home() {
         )}
         <div className="insight-head">
           <span className={`kind-pill kind-${kind}`}>{groupMeta(s.family).label}</span>
+          {owned && <span className="owned-badge" title={`Owned by ${USER_NAMES[s.state!.actor] ?? s.state!.actor}`}>👤 {USER_NAMES[s.state!.actor] ?? s.state!.actor} owns this</span>}
+          {s.aged && <span className="aged-badge" title="Stale and low-signal — folded down. Still here if it matters.">💤 aged</span>}
           {mine && <span className="for-you">for your desk</span>}
           {s.source && (
             <span className="conn-tag" title="Demo: sourced from a connected workspace tool over MCP (ClickUp / Google Drive / pricing sheet), joined to the project corpus — see VISION.md">
@@ -1393,45 +1438,97 @@ export default function Home() {
           </div>
         )}
 
-        {/* Shared human layer — visible to everyone */}
-        {notes.length > 0 && (
+        {/* Clarifying questions — the system asks YOU what would firm this up. */}
+        {s.clarify && s.clarify.length > 0 && !nullified && (
+          <div className="clarify">
+            <div className="clarify-h">❓ {s.clarify.length} question{s.clarify.length === 1 ? "" : "s"} would sharpen this</div>
+            {s.clarify.map((q, i) => {
+              const key = `${s.id}::${i}`;
+              const openQ = clarifyFor === key;
+              return (
+                <div className="clarify-q" key={i}>
+                  <div className="clarify-q-text">{q.q}</div>
+                  <div className="clarify-q-why">{q.why}</div>
+                  {openQ ? (
+                    <div className="clarify-answer">
+                      <textarea value={clarifyText} onChange={(e) => setClarifyText(e.target.value)} placeholder="Your answer — recorded as a refinement the team sees…" rows={2} />
+                      <div className="note-composer-actions">
+                        <button className="ghost" onClick={() => { setClarifyFor(null); setClarifyText(""); }}>Cancel</button>
+                        <button className="note-post" disabled={notePosting || !clarifyText.trim()} onClick={() => answerClarify(s.id, q.q, clarifyText)}>{notePosting ? "Saving…" : "Answer"}</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button className="clarify-answer-btn" onClick={() => { setClarifyFor(key); setClarifyText(""); }}>Answer this</button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* REFINEMENTS — human input that SHAPES the insight (context / correction). */}
+        {refinements.length > 0 && (
           <div className="notes">
-            {notes.map((n) => (
+            {refinements.map((n) => (
               <div className={`note-item note-${n.kind}`} key={n.id}>
                 <span className="note-who">{USER_NAMES[n.author] ?? n.author}</span>
-                <span className={`note-kind nk-${n.kind}`}>{n.kind}</span>
+                <span className={`note-kind nk-${n.kind}`}>{n.kind === "context" ? "context" : n.kind}</span>
                 <span className="note-body">{n.body}</span>
               </div>
             ))}
           </div>
         )}
+
+        {/* COMMENTS — team discussion; doesn't change the insight. */}
+        {comments.length > 0 && (
+          <div className="comments">
+            {comments.map((n) => (
+              <div className="comment-item" key={n.id}>
+                <span className="comment-who">{USER_NAMES[n.author] ?? n.author}</span>
+                <span className="comment-body">{n.body}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Lifecycle + human loop */}
         <div className="insight-foot">
-          <button className="note-add" onClick={() => { setNoteOpenFor(composerOpen ? null : s.id); setNoteText(""); setNoteKind("context"); }}>
-            💬 {notes.length ? `${notes.length} note${notes.length === 1 ? "" : "s"} · add` : "Add a note"}
-          </button>
-          {!nullified && <button className="dismiss-mini" onClick={() => dismissSignal(s)} title="clear from your own inbox (doesn't affect the team)">Dismiss for me</button>}
+          <button className="foot-btn" onClick={() => { setNoteOpenFor(composerOpen ? null : s.id); setNoteText(""); setNoteKind("context"); setComposerMode("refine"); }}>Refine ▸</button>
+          <button className="foot-btn" onClick={() => { setNoteOpenFor(composerOpen ? null : s.id); setNoteText(""); setNoteKind("comment"); setComposerMode("discuss"); }}>💬 Discuss{comments.length ? ` · ${comments.length}` : ""}</button>
+          <span className="foot-sep" />
+          {!nullified && !owned && <button className="foot-btn" onClick={() => setSignalLifecycle(s, "owned")} title="Take ownership — badges it for the team">Own it</button>}
+          {!nullified && <button className="foot-btn" onClick={() => setSignalLifecycle(s, "resolved")} title="Dealt with — moves to History (never deleted)">✓ Resolve</button>}
+          {!nullified && <button className="foot-btn" onClick={() => setSignalLifecycle(s, "snoozed")} title="Hide for 2 weeks, then it returns">Snooze</button>}
         </div>
+
         {composerOpen && (
           <div className="note-composer">
-            <div className="note-kinds">
-              {(["context", "correction", "nullify"] as const).map((k) => (
-                <button key={k} className={`note-kind-pick nk-${k} ${noteKind === k ? "active" : ""}`} onClick={() => setNoteKind(k)}>
-                  {k === "context" ? "Add context" : k === "correction" ? "Correct" : "Nullify"}
-                </button>
-              ))}
-            </div>
+            {composerMode === "refine" ? (
+              <>
+                <div className="composer-lead">Refine the insight — the team sees this and it shapes how the insight is treated.</div>
+                <div className="note-kinds">
+                  {(["context", "correction", "nullify"] as const).map((k) => (
+                    <button key={k} className={`note-kind-pick nk-${k} ${noteKind === k ? "active" : ""}`} onClick={() => setNoteKind(k)}>
+                      {k === "context" ? "Add context" : k === "correction" ? "Correct" : "Nullify"}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="composer-lead">💬 Discuss with the team — a comment; it won't change the insight.</div>
+            )}
             <textarea
               value={noteText}
               onChange={(e) => setNoteText(e.target.value)}
-              placeholder={noteKind === "nullify" ? "Why should this be retired for the team?" : noteKind === "correction" ? "What's off, and what's the correction?" : "Add context that sharpens this insight…"}
+              placeholder={composerMode === "discuss" ? "Comment for the team…" : noteKind === "nullify" ? "Why should this be retired for the team?" : noteKind === "correction" ? "What's off, and what's the correction?" : "Add context that sharpens this insight…"}
               rows={2}
             />
             <div className="note-composer-foot">
               <span className="note-shared-hint">🌐 visible to the whole team</span>
               <div className="note-composer-actions">
                 <button className="ghost" onClick={() => setNoteOpenFor(null)}>Cancel</button>
-                <button className="note-post" disabled={notePosting || !noteText.trim()} onClick={() => annotateSignal(s.id, noteKind, noteText)}>
-                  {notePosting ? "Posting…" : "Post note"}
+                <button className="note-post" disabled={notePosting || !noteText.trim()} onClick={() => annotateSignal(s.id, composerMode === "discuss" ? "comment" : noteKind, noteText)}>
+                  {notePosting ? "Posting…" : composerMode === "discuss" ? "Post comment" : "Post refinement"}
                 </button>
               </div>
             </div>

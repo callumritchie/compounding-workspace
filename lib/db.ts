@@ -228,6 +228,22 @@ CREATE TABLE IF NOT EXISTS signal_annotations (
 );
 CREATE INDEX IF NOT EXISTS idx_annotations_signal ON signal_annotations(signal_id);
 
+-- LIFECYCLE state of a surfaced insight — how the team closes one off over time
+-- WITHOUT losing it. Append-only; the latest row per signal_id is the current state.
+-- resolved / snoozed(active) leave the ACTIVE feed (resolved → History, never deleted);
+-- owned keeps it in the feed with an owner. Recompute + this thin layer keeps the feed
+-- bounded without dropping value; reopened undoes a close.
+CREATE TABLE IF NOT EXISTS signal_state (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  signal_id    TEXT NOT NULL,                          -- stable inbox signal id
+  actor        TEXT NOT NULL,
+  state        TEXT NOT NULL,                          -- owned | resolved | snoozed | reopened
+  note         TEXT,
+  snooze_until TEXT,                                   -- ISO — set when state = 'snoozed'
+  ts           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_signal_state_sig ON signal_state(signal_id);
+
 -- In-project FINDINGS feedback (the proactive "Findings" surface). Findings are
 -- recomputed on demand from the engagement's own state, so — like the annotations
 -- above — feedback is keyed by the finding's STABLE id (e.g. 'rr:acme-health:budget')

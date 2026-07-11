@@ -15,7 +15,11 @@
 
 import { getDb, audit } from "../db";
 
-export type AnnotationKind = "context" | "correction" | "nullify";
+// Two families of human input, deliberately distinct:
+//   REFINE  (context | correction | nullify) — shapes the INSIGHT itself.
+//   COMMENT (comment)                         — team DISCUSSION; doesn't change it.
+export type AnnotationKind = "context" | "correction" | "nullify" | "comment";
+export const REFINE_KINDS: AnnotationKind[] = ["context", "correction", "nullify"];
 
 export type Annotation = {
   id: number;
@@ -28,14 +32,16 @@ export type Annotation = {
 
 // The per-signal rollup the inbox uses to flag an insight at a glance.
 export type AnnotationRollup = {
-  notes: Annotation[];
+  notes: Annotation[]; // all, for back-compat
+  refinements: Annotation[]; // context/correction/nullify — shape the insight
+  comments: Annotation[]; // team discussion
   count: number;
   nullified: boolean;        // an active 'nullify' exists → retire for everyone
   nullifiedBy?: string;
   nullifyReason?: string;
 };
 
-const KINDS: AnnotationKind[] = ["context", "correction", "nullify"];
+const KINDS: AnnotationKind[] = ["context", "correction", "nullify", "comment"];
 
 // Add a note to a surfaced insight. Persisted + audited so the whole team sees it.
 export function addAnnotation(input: {
@@ -101,7 +107,13 @@ export function getAnnotationsFor(signalIds: string[]): Record<string, Annotatio
 }
 
 function foldRollup(notes: Annotation[]): AnnotationRollup {
-  const roll: AnnotationRollup = { notes, count: notes.length, nullified: false };
+  const roll: AnnotationRollup = {
+    notes,
+    refinements: notes.filter((n) => REFINE_KINDS.includes(n.kind)),
+    comments: notes.filter((n) => n.kind === "comment"),
+    count: notes.length,
+    nullified: false,
+  };
   // Latest active nullify wins (notes are oldest-first, so scan to the end).
   for (const n of notes) {
     if (n.kind === "nullify") {
