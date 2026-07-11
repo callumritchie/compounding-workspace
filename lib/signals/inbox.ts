@@ -19,6 +19,7 @@ import { roleOf, canAccessSpace, canSeeDeliveryHealth } from "../team";
 import { queryAtoms } from "./atoms";
 import { accountHealth, riskEarlyWarnings, deliveryHealth, mitigationPlaybook } from "./temporal";
 import { detectWhitespace } from "./whitespace";
+import { buildOffer, type Offer } from "../offers";
 import { connectedSignals } from "./connected";
 
 export type SignalFamily =
@@ -54,6 +55,7 @@ export type InboxSignal = {
   actions: { draft: boolean; nominate: boolean }; // which in-place actions apply
   source?: ConnectedSource; // set only on connected-workspace (demo) signals
   note?: string; // plain-language gloss shown in the evidence panel (e.g. how a score is built)
+  offer?: Offer; // new-service-line only: the priced, staffable Offer join (see lib/offers.ts)
 };
 
 const CONF_THRESHOLD = 0.6; // below this, a transcript-derived signal is "soft"
@@ -180,17 +182,25 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
     });
   }
 
-  // ---- New service lines / whitespace (aggregate, de-identified: sectors + count) ----
+  // ---- New service lines / whitespace, JOINED into a priced, staffable Offer ------
+  // The whitespace demand is only the first leg. buildOffer couples it to pricing
+  // comparables and the resourcing bench, so the card carries a real range, a
+  // staffing read, and a weakest-link confidence — the insight no single tool holds.
   for (const w of await detectWhitespace()) {
+    const offer = await buildOffer(w);
+    const priced = offer.price ? ` · ~£${Math.round(offer.price.low / 1000)}k–£${Math.round(offer.price.high / 1000)}k` : "";
     mk({
       id: `ws:${w.need.slice(0, 40)}`, family: "new-service-line", route: "leadership",
       title: `Whitespace: ${w.need}`,
-      detail: `${w.count} clients across ${w.sectors.join(" · ")} asking — not in our catalogue`,
+      detail: `${w.count} clients across ${w.sectors.join(" · ")} asking — not in our catalogue${priced}`,
       evidence: w.evidence,
       support: { sectors: w.sectors, count: w.count },
-      confidence: Math.min(0.9, 0.5 + w.count * 0.1), urgency: 0.4,
+      // Confidence is the joined weakest-link read (demand × price × staffing), not
+      // demand alone — an offer we can't staff or price shouldn't read as High.
+      confidence: offer.confidence, urgency: 0.5,
       soft: false, deIdentified: true,
       actions: { draft: true, nominate: true },
+      offer,
     });
   }
 

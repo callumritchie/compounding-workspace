@@ -972,3 +972,28 @@ html, body {
 .iq-empty { font-size: 13px; color: var(--ink-2); padding: 14px; border: 1px dashed var(--hair); border-radius: var(--r); text-align: center; }
 .iq-threshold { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); text-align: center; padding: 13px; border: 1px dashed var(--hair); border-radius: var(--r); margin-top: 6px; }
 .link-btn { border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; padding: 0; border-bottom: 1px solid currentColor; }
+
+/* ---- Offer join (new-service-line): demand × price × staffing --------------
+   An inset warm panel; monospace carries the numbers (the "data voice"); staffing
+   uses semantic colour, kept distinct from the terracotta accent. The stress-test
+   is a legible amber/red honesty line, never buried. */
+.offer { margin: 11px 0 12px; padding: 12px 13px; background: var(--surface-2); border: 1px solid var(--hair); border-radius: var(--r-lg); }
+.offer-h { display: flex; align-items: baseline; gap: 9px; margin-bottom: 9px; }
+.offer-badge { font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+.offer-sub { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); letter-spacing: .02em; }
+.offer-grid { display: grid; gap: 6px; }
+.offer-leg { display: grid; grid-template-columns: 74px 1fr; gap: 10px; align-items: baseline; font-size: 13px; line-height: 1.45; color: var(--ink); }
+.offer-k { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-3); padding-top: 1px; }
+.offer-v b { font-weight: 650; }
+.offer-mono { font-family: var(--mono); font-size: 13px; letter-spacing: -.01em; }
+.offer-vs { color: var(--ink-3); font-size: 12px; }
+.offer-none { color: var(--ink-3); font-style: italic; }
+.offer-v.staff-deliverable b { color: var(--good); }
+.offer-v.staff-tight b { color: var(--ink-2); }
+.offer-v.staff-gap b { color: var(--risk); }
+.offer-comps, .offer-legs { font-size: 11.5px; color: var(--ink-3); margin-top: 8px; line-height: 1.5; }
+.offer-legs { font-family: var(--mono); letter-spacing: -.01em; }
+.offer-stress { margin-top: 9px; padding: 8px 10px; background: var(--risk-soft); border-radius: var(--r-sm); }
+.offer-stress-h { font-family: var(--mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--risk); }
+.offer-stress ul { margin: 4px 0 0; padding-left: 16px; }
+.offer-stress li { font-size: 12px; color: var(--ink); line-height: 1.45; margin-top: 2px; }

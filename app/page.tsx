@@ -311,6 +311,21 @@ type InboxSignal = {
   source?: "clickup" | "drive" | "pricing"; // connected-workspace (demo) provenance
   note?: string; // plain-language gloss shown in the evidence panel
   assessment?: SignalAssessment; // auditable confidence read (mirror of lib/signals/assess)
+  offer?: Offer; // new-service-line only: the priced, staffable Offer join (lib/offers)
+};
+// The Offer join (mirror of lib/offers): whitespace demand × pricing × staffing.
+type OfferPrice = { low: number; high: number; median: number; margin: number; bookMargin: number; comparables: number } | null;
+type OfferStaffing = { band: "deliverable" | "tight" | "gap"; available: { name: string; grade: string; rollsOffInDays: number }[]; gapNote?: string };
+type OfferFit = { coverage: number; nearest: string; kind: "extension" | "new-capability" };
+type Offer = {
+  need: string;
+  demand: { count: number; sectors: string[]; clients: string[]; evidence: string[]; oldestDays?: number };
+  price: OfferPrice;
+  staffing: OfferStaffing;
+  fit: OfferFit;
+  confidence: number;
+  legs: { demand: number; price: number; staffing: number };
+  stressTest: string[];
 };
 // Auditable confidence: the real drivers behind a rating + the counter-check.
 type ConfFactor = { label: string; status: "strong" | "moderate" | "weak"; detail: string };
@@ -1019,6 +1034,74 @@ export default function Home() {
   // verbatim quotes + provenance. Below sits the SHARED annotation layer: the
   // team's notes and a composer to sharpen or nullify. Ends at the insight — no
   // downstream actions in this version.
+  // The Offer block — demand × price × staffing joined into one decision. Rendered
+  // on new-service-line cards. Every number is honest: a price RANGE from named
+  // comparables (or "unknown" when none), a staffing read that shows the gap, and a
+  // confidence that is the weakest of the three legs — never a flattering average.
+  function renderOfferBlock(o: Offer) {
+    const gbp = (n: number) => `£${Math.round(n / 1000)}k`;
+    const p = (n: number) => `${Math.round(n * 100)}%`;
+    const staffLabel = o.staffing.band === "deliverable" ? "Deliverable now" : o.staffing.band === "tight" ? "Tight" : "Capability gap";
+    return (
+      <div className="offer">
+        <div className="offer-h">
+          <span className="offer-badge">◆ Offer</span>
+          <span className="offer-sub">demand × price × staffing — joined</span>
+        </div>
+        <div className="offer-grid">
+          <div className="offer-leg">
+            <span className="offer-k">Demand</span>
+            <span className="offer-v"><b>{o.demand.count}</b> clients · {o.demand.sectors.join(" · ")}</span>
+          </div>
+          <div className="offer-leg">
+            <span className="offer-k">Price</span>
+            <span className="offer-v">
+              {o.price ? (
+                <>
+                  <b className="offer-mono">{gbp(o.price.low)}–{gbp(o.price.high)}</b> · ~{p(o.price.margin)} margin{" "}
+                  <span className="offer-vs">vs {p(o.price.bookMargin)} book</span>
+                </>
+              ) : (
+                <span className="offer-none">no comparable to price against yet</span>
+              )}
+            </span>
+          </div>
+          <div className="offer-leg">
+            <span className="offer-k">Staffing</span>
+            <span className={`offer-v staff-${o.staffing.band}`}>
+              <b>{staffLabel}</b>
+              {o.staffing.available.length ? (
+                <> — {o.staffing.available.map((a) => `${a.name} (${a.rollsOffInDays <= 0 ? "on bench" : `free in ${a.rollsOffInDays}d`})`).join(", ")}</>
+              ) : o.staffing.gapNote ? (
+                <> — {o.staffing.gapNote}</>
+              ) : null}
+            </span>
+          </div>
+          <div className="offer-leg">
+            <span className="offer-k">Fit</span>
+            <span className="offer-v">
+              {o.fit.kind === "extension" ? <>extends <b>{o.fit.nearest}</b></> : <>new capability (closest: {o.fit.nearest})</>}
+            </span>
+          </div>
+        </div>
+        {o.price && (
+          <div className="offer-comps">
+            Priced from {o.price.comparables} comparable engagement{o.price.comparables === 1 ? "" : "s"}, median {gbp(o.price.median)}.
+          </div>
+        )}
+        <div className="offer-legs">
+          Confidence is the weakest leg — demand {p(o.legs.demand)} · price {p(o.legs.price)} · staffing {p(o.legs.staffing)}.
+        </div>
+        {o.stressTest.length > 0 && (
+          <div className="offer-stress">
+            <span className="offer-stress-h">⚠ before you pitch</span>
+            <ul>{o.stressTest.map((t, i) => <li key={i}>{t}</li>)}</ul>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function renderInsightCard(s: InboxSignal) {
     const cm = confMeta(s.confidence);
     const mine = s.route === myRoute;
@@ -1053,6 +1136,8 @@ export default function Home() {
         </div>
         <div className="insight-title">{s.title}</div>
         <div className="insight-detail">{s.detail}</div>
+
+        {s.offer && renderOfferBlock(s.offer)}
 
         <div className="conf-row">
           <span className={`conf-badge conf-${cm.level}`}><span className="conf-meter">{cm.meter}</span> {cm.label}</span>

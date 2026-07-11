@@ -1,20 +1,6 @@
 {
   "source": "pricing",
   "label": "Pricing sheet · Rate card & margins",
-  "items": [
-    {
-      "id": "pr-managed-data-platform",
-      "sector": "healthcare",
-      "title": "Whitespace \"managed data platform\" prices at ~£120k with ~18% margin headroom",
-      "detail": "Pricing sheet · median of 3 comparable engagements · above current blended rate",
-      "evidence": [
-        "Pricing 2026 › Comparable builds › managed data platform · median £118k · blended margin 42% vs 24% book average"
-      ],
-      "support": { "sectors": ["healthcare"], "count": 3 },
-      "confidence": 0.65,
-      "urgency": 0.4,
-      "note": "Joins to the corpus: a whitespace signal already shows several healthcare clients asking for this. Pricing puts a number on it — a quantified, priced offer instead of a hunch.",
-      "deIdentified": true
-    }
-  ]
+  "note": "Pricing no longer surfaces as a standalone pre-baked card. It is now COMPUTED into the whitespace Offer join (lib/offers.ts reads workspace/firm/pricing.json), so a priced offer is derived from real comparables matched to actual demand — not hand-authored here.",
+  "items": []
 }
