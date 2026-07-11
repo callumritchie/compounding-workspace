@@ -20,7 +20,7 @@ import { queryAtoms } from "./atoms";
 import { accountHealth, riskEarlyWarnings, deliveryHealth, mitigationPlaybook } from "./temporal";
 import { detectWhitespace } from "./whitespace";
 import { buildOffer, type Offer } from "../offers";
-import { buildFollowOns, buildPropositions, type FollowOn, type Proposition } from "../followons";
+import { buildFollowOns, buildPropositions, attachFollowOnLinks, type FollowOn, type Proposition } from "../followons";
 import { connectedSignals } from "./connected";
 
 export type SignalFamily =
@@ -195,8 +195,10 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
   // The whitespace demand is only the first leg. buildOffer couples it to pricing
   // comparables and the resourcing bench, so the card carries a real range, a
   // staffing read, and a weakest-link confidence — the insight no single tool holds.
+  const offers: Offer[] = [];
   for (const w of await detectWhitespace()) {
     const offer = await buildOffer(w);
+    offers.push(offer);
     const priced = offer.price ? ` · ~£${Math.round(offer.price.low / 1000)}k–£${Math.round(offer.price.high / 1000)}k` : "";
     mk({
       id: `ws:${w.need.slice(0, 40)}`, family: "new-service-line", route: "leadership",
@@ -215,8 +217,11 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
 
   // ---- Follow-on: a named opening on an existing account (single-account) --------
   // The warmest lead the firm has — a live buying signal, anchored to the sponsor
-  // who voiced it and matched to the adjacent thing we already sell.
-  for (const f of await buildFollowOns()) {
+  // who voiced it and matched to the adjacent thing we already sell. A bespoke ask is
+  // then LINKED to the firm-level proposition/priced offer it maps to (cross-altitude).
+  const propositions = await buildPropositions();
+  const followOns = await attachFollowOnLinks(await buildFollowOns(), propositions, offers);
+  for (const f of followOns) {
     mk({
       id: f.id, family: "follow-on", route: "sales",
       title: f.contact ? `Follow-on at ${f.client} — ${f.contact.name} is ready to talk` : `Follow-on opening at ${f.client}`,
@@ -233,7 +238,7 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
   // ---- Proposition: a broad offering the firm could develop (de-identified) -------
   // One altitude above a single deal — recurring appetite across several clients that
   // is worth packaging into a proposition, not just chasing one project at a time.
-  for (const p of await buildPropositions()) {
+  for (const p of propositions) {
     mk({
       id: p.id, family: "proposition", route: "leadership",
       title: `Proposition: ${p.label}`,

@@ -28,13 +28,18 @@ import { catalogOfferings } from "./signals/whitespace";
 import { accountHealth } from "./signals/temporal";
 import { embed, embedOne } from "./embed";
 import { cosine } from "./vectors";
+import type { Offer } from "./offers";
 
-const OFFERING_MATCH = 0.42; // atom must be genuinely close to an offering to name it (below this a
+const OFFERING_MATCH = 0.42;
+const LINK_SIM = 0.4; // a bespoke follow-on this close to a proposition/offer theme is the same play // atom must be genuinely close to an offering to name it (below this a
 // "match" is noise — better to call it bespoke than propose the wrong service). Calibrated with offers.ts.
 const PROPOSITION_SIM = 0.4; // appetite atoms this similar are the same theme
 const STALE_DAYS = 60; // a buying signal older than this earns a "still live?" caveat
 
 // ---- Follow-on: a named opening on an existing account ------------------------
+// When a follow-on is bespoke (out of catalogue), the ask is often the very thing a
+// firm-level proposition/offer already addresses — so we point the seller at it.
+export type FollowOnLink = { proposition: string; priceLow?: number; priceHigh?: number };
 export type FollowOn = {
   id: string;
   project: string;
@@ -49,6 +54,7 @@ export type FollowOn = {
   urgency: number;
   ts?: string;
   stressTest: string[];
+  link?: FollowOnLink; // the firm-level proposition/offer this bespoke ask maps to
 };
 
 // Nearest thing we already sell to a piece of expressed intent (the expansion play).
@@ -210,4 +216,48 @@ export async function buildPropositions(minClients = 2): Promise<Proposition[]> 
   }
   // Widest appetite first.
   return out.sort((a, b) => b.clients - a.clients);
+}
+
+// ---- Cross-altitude link: bespoke follow-on → firm proposition (+ priced offer) --
+// A bespoke follow-on means the client wants something off-catalogue — which is
+// exactly what a proposition/offer addresses. Matching them turns "scope something
+// bespoke" into "lead with our Implementation proposition (£112–145k)". Only bespoke
+// follow-ons are linked; a clean catalogue expansion needs no firm-level play.
+export async function attachFollowOnLinks(
+  followOns: FollowOn[],
+  propositions: Proposition[],
+  offers: Offer[]
+): Promise<FollowOn[]> {
+  const bespoke = followOns.filter((f) => !f.offering);
+  if (!bespoke.length || (!propositions.length && !offers.length)) return followOns;
+
+  const headVecs = await embed(bespoke.map((f) => f.headline));
+  const propVecs = propositions.length ? await embed(propositions.map((p) => p.theme)) : [];
+  const offerVecs = offers.length ? await embed(offers.map((o) => o.need)) : [];
+
+  const nearest = (v: number[], vecs: number[][]): { idx: number; sim: number } => {
+    let idx = -1;
+    let sim = -1;
+    vecs.forEach((ov, j) => {
+      const c = cosine(v, ov);
+      if (c > sim) {
+        sim = c;
+        idx = j;
+      }
+    });
+    return { idx, sim };
+  };
+
+  bespoke.forEach((f, i) => {
+    const p = nearest(headVecs[i], propVecs);
+    if (p.idx < 0 || p.sim < LINK_SIM) return; // no firm-level play this maps to
+    const link: FollowOnLink = { proposition: propositions[p.idx].label };
+    const o = nearest(headVecs[i], offerVecs);
+    if (o.idx >= 0 && o.sim >= LINK_SIM && offers[o.idx].price) {
+      link.priceLow = offers[o.idx].price!.low;
+      link.priceHigh = offers[o.idx].price!.high;
+    }
+    f.link = link;
+  });
+  return followOns;
 }

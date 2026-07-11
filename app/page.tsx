@@ -316,11 +316,13 @@ type InboxSignal = {
   proposition?: Proposition; // proposition only: broad offering the firm could develop
 };
 // Stakeholder-value plane (mirror of lib/followons).
+type FollowOnLink = { proposition: string; priceLow?: number; priceHigh?: number };
 type FollowOn = {
   id: string; project: string; client: string; sector: string;
   contact: { name: string; role: string } | null;
   headline: string; move: string; offering: string | null;
   evidence: string; confidence: number; urgency: number; ts?: string; stressTest: string[];
+  link?: FollowOnLink;
 };
 type Proposition = {
   id: string; theme: string; label: string; clients: number; sectors: string[];
@@ -1139,6 +1141,17 @@ export default function Home() {
             <span className="offer-k">Move</span>
             <span className="offer-v"><b>{f.move}</b>{f.offering ? <span className="offer-vs"> — in the catalogue</span> : null}</span>
           </div>
+          {f.link && (
+            <div className="offer-leg">
+              <span className="offer-k">Lead with</span>
+              <span className="offer-v sv-link">
+                🧭 <b>{f.link.proposition}</b>
+                {f.link.priceLow != null && f.link.priceHigh != null ? (
+                  <span className="offer-vs"> · ~£{Math.round(f.link.priceLow / 1000)}k–£{Math.round(f.link.priceHigh / 1000)}k offer</span>
+                ) : null}
+              </span>
+            </div>
+          )}
         </div>
         {f.stressTest.length > 0 && (
           <div className="offer-stress">

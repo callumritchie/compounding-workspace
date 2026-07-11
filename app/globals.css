@@ -1002,3 +1002,5 @@ html, body {
    distinguishes the two altitudes (near-term relationship vs broad offering). */
 .sv-block { border-left: 3px solid var(--accent); }
 .sv-prop { border-left-color: var(--ink-3); }
+.sv-link { color: var(--ink); }
+.sv-link b { color: var(--accent); font-weight: 650; }
