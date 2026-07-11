@@ -8,5 +8,25 @@
     "name": "Raj Patel",
     "role": "Chief Medical Officer",
     "org": "acme"
+  },
+  "northwind-cfo": {
+    "name": "David Kerr",
+    "role": "CFO",
+    "org": "northwind"
+  },
+  "summit-coo": {
+    "name": "Elena Marsh",
+    "role": "COO",
+    "org": "summit"
+  },
+  "harbor-cdo": {
+    "name": "Tom Whitfield",
+    "role": "Chief Data Officer",
+    "org": "harbor"
+  },
+  "beacon-ceo": {
+    "name": "Priya Nair",
+    "role": "CEO",
+    "org": "beacon"
   }
 }

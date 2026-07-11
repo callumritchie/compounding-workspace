@@ -312,6 +312,19 @@ type InboxSignal = {
   note?: string; // plain-language gloss shown in the evidence panel
   assessment?: SignalAssessment; // auditable confidence read (mirror of lib/signals/assess)
   offer?: Offer; // new-service-line only: the priced, staffable Offer join (lib/offers)
+  followOn?: FollowOn; // follow-on only: named opening + adjacent move (lib/followons)
+  proposition?: Proposition; // proposition only: broad offering the firm could develop
+};
+// Stakeholder-value plane (mirror of lib/followons).
+type FollowOn = {
+  id: string; project: string; client: string; sector: string;
+  contact: { name: string; role: string } | null;
+  headline: string; move: string; offering: string | null;
+  evidence: string; confidence: number; urgency: number; ts?: string; stressTest: string[];
+};
+type Proposition = {
+  id: string; theme: string; label: string; clients: number; sectors: string[];
+  evidence: string[]; confidence: number; urgency: number; stressTest: string[];
 };
 // The Offer join (mirror of lib/offers): whitespace demand × pricing × staffing.
 type OfferPrice = { low: number; high: number; median: number; margin: number; bookMargin: number; comparables: number } | null;
@@ -1025,7 +1038,7 @@ export default function Home() {
   function signalBucket(s: InboxSignal): "risk" | "opp" | "fyi" {
     if (s.soft) return "fyi";
     if (["churn", "early-warning", "delivery-health"].includes(s.family)) return "risk";
-    if (["buying", "competitive", "new-service-line"].includes(s.family)) return "opp";
+    if (["buying", "competitive", "new-service-line", "follow-on", "proposition"].includes(s.family)) return "opp";
     return "fyi";
   }
   // One surfaced INSIGHT — evidence-first. Leads with the finding + an auditable
@@ -1102,6 +1115,70 @@ export default function Home() {
     );
   }
 
+  // Follow-on block — the named opening: who to reach out to and the adjacent move.
+  // The relationship + the buying signal in one place; a warm, specific next step.
+  function renderFollowOnBlock(f: FollowOn) {
+    return (
+      <div className="offer sv-block">
+        <div className="offer-h">
+          <span className="offer-badge">🤝 Follow-on</span>
+          <span className="offer-sub">live signal × relationship × catalogue</span>
+        </div>
+        <div className="offer-grid">
+          <div className="offer-leg">
+            <span className="offer-k">Reach out</span>
+            <span className="offer-v">
+              {f.contact ? <><b>{f.contact.name}</b> · {f.contact.role} at {f.client}</> : <span className="offer-none">no named sponsor on record — identify the buyer first</span>}
+            </span>
+          </div>
+          <div className="offer-leg">
+            <span className="offer-k">They said</span>
+            <span className="offer-v">“{f.headline}”</span>
+          </div>
+          <div className="offer-leg">
+            <span className="offer-k">Move</span>
+            <span className="offer-v"><b>{f.move}</b>{f.offering ? <span className="offer-vs"> — in the catalogue</span> : null}</span>
+          </div>
+        </div>
+        {f.stressTest.length > 0 && (
+          <div className="offer-stress">
+            <span className="offer-stress-h">⚠ before you reach out</span>
+            <ul>{f.stressTest.map((t, i) => <li key={i}>{t}</li>)}</ul>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Proposition block — one altitude up: not a deal but an offering to develop,
+  // grounded in appetite recurring across several clients (de-identified).
+  function renderPropositionBlock(p: Proposition) {
+    return (
+      <div className="offer sv-block sv-prop">
+        <div className="offer-h">
+          <span className="offer-badge">🧭 Proposition</span>
+          <span className="offer-sub">appetite across the book — an offering to build</span>
+        </div>
+        <div className="offer-grid">
+          <div className="offer-leg">
+            <span className="offer-k">Appetite</span>
+            <span className="offer-v"><b>{p.clients}</b> clients · {p.sectors.join(" · ")}</span>
+          </div>
+          <div className="offer-leg">
+            <span className="offer-k">Develop</span>
+            <span className="offer-v">Package a repeatable offering around this recurring demand.</span>
+          </div>
+        </div>
+        {p.stressTest.length > 0 && (
+          <div className="offer-stress">
+            <span className="offer-stress-h">⚠ before you build</span>
+            <ul>{p.stressTest.map((t, i) => <li key={i}>{t}</li>)}</ul>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function renderInsightCard(s: InboxSignal) {
     const cm = confMeta(s.confidence);
     const mine = s.route === myRoute;
@@ -1138,6 +1215,8 @@ export default function Home() {
         <div className="insight-detail">{s.detail}</div>
 
         {s.offer && renderOfferBlock(s.offer)}
+        {s.followOn && renderFollowOnBlock(s.followOn)}
+        {s.proposition && renderPropositionBlock(s.proposition)}
 
         <div className="conf-row">
           <span className={`conf-badge conf-${cm.level}`}><span className="conf-meter">{cm.meter}</span> {cm.label}</span>
@@ -1263,6 +1342,8 @@ export default function Home() {
       "delivery-health": { icon: "🩺", label: "delivery health" },
       "risk-playbook": { icon: "📘", label: "risk playbook" },
       "new-service-line": { icon: "🌱", label: "new service line" },
+      "follow-on": { icon: "🤝", label: "follow-on" },
+      proposition: { icon: "🧭", label: "proposition" },
       pipeline: { icon: "📊", label: "pipeline" },
       resourcing: { icon: "🧑‍💼", label: "resourcing" },
       pricing: { icon: "💷", label: "pricing" },
@@ -1303,8 +1384,10 @@ export default function Home() {
   function groupMeta(family: string): { label: string; kind: "opp" | "risk" | "deliv"; order: number } {
     const m: Record<string, { label: string; kind: "opp" | "risk" | "deliv"; order: number }> = {
       buying: { label: "Buying signal", kind: "opp", order: 1 },
+      "follow-on": { label: "Follow-on work", kind: "opp", order: 1.2 },
       pipeline: { label: "Pipeline", kind: "opp", order: 1.5 },
       "new-service-line": { label: "Expand the offer", kind: "opp", order: 2 },
+      proposition: { label: "New proposition", kind: "opp", order: 2.2 },
       pricing: { label: "Pricing & margin", kind: "opp", order: 2.5 },
       competitive: { label: "Competitive", kind: "deliv", order: 3 },
       objection: { label: "Objection / positioning", kind: "deliv", order: 4 },

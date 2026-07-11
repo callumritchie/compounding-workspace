@@ -20,11 +20,14 @@ import { queryAtoms } from "./atoms";
 import { accountHealth, riskEarlyWarnings, deliveryHealth, mitigationPlaybook } from "./temporal";
 import { detectWhitespace } from "./whitespace";
 import { buildOffer, type Offer } from "../offers";
+import { buildFollowOns, buildPropositions, type FollowOn, type Proposition } from "../followons";
 import { connectedSignals } from "./connected";
 
 export type SignalFamily =
   | "buying" | "competitive" | "objection" | "churn"
   | "early-warning" | "delivery-health" | "risk-playbook" | "new-service-line"
+  // Stakeholder-value families: a named follow-on opening + a broad firm proposition.
+  | "follow-on" | "proposition"
   // Connected-workspace families (demo): sourced from mocked MCP connectors, not the corpus.
   | "pipeline" | "resourcing" | "pricing";
 
@@ -56,6 +59,8 @@ export type InboxSignal = {
   source?: ConnectedSource; // set only on connected-workspace (demo) signals
   note?: string; // plain-language gloss shown in the evidence panel (e.g. how a score is built)
   offer?: Offer; // new-service-line only: the priced, staffable Offer join (see lib/offers.ts)
+  followOn?: FollowOn; // follow-on only: the named opening + adjacent move (see lib/followons.ts)
+  proposition?: Proposition; // proposition only: the broad offering the firm could develop
 };
 
 const CONF_THRESHOLD = 0.6; // below this, a transcript-derived signal is "soft"
@@ -75,6 +80,10 @@ const VISIBILITY: Record<SignalFamily, (user: string) => boolean> = {
   "early-warning": () => true,
   "risk-playbook": () => true,
   "delivery-health": (u) => canSeeDeliveryHealth(u), // sensitive team-candour → lead only
+  // Stakeholder-value families are open to the team (follow-on is single-account,
+  // proposition is de-identified aggregate — both safe to surface broadly).
+  "follow-on": () => true,
+  proposition: () => true,
   // Connected-workspace (demo) families ride the same open inbox as the rest.
   pipeline: () => true,
   resourcing: () => true,
@@ -201,6 +210,41 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
       soft: false, deIdentified: true,
       actions: { draft: true, nominate: true },
       offer,
+    });
+  }
+
+  // ---- Follow-on: a named opening on an existing account (single-account) --------
+  // The warmest lead the firm has — a live buying signal, anchored to the sponsor
+  // who voiced it and matched to the adjacent thing we already sell.
+  for (const f of await buildFollowOns()) {
+    mk({
+      id: f.id, family: "follow-on", route: "sales",
+      title: f.contact ? `Follow-on at ${f.client} — ${f.contact.name} is ready to talk` : `Follow-on opening at ${f.client}`,
+      detail: `${f.move}${f.contact ? ` · ${f.contact.name}, ${f.contact.role}` : " · no named sponsor on record"}`,
+      evidence: [f.evidence].filter(Boolean),
+      project: f.project, client: f.client, sector: f.sector,
+      confidence: f.confidence, urgency: f.urgency, ts: f.ts,
+      soft: f.confidence < CONF_THRESHOLD, deIdentified: false,
+      actions: { draft: true, nominate: false },
+      followOn: f,
+    });
+  }
+
+  // ---- Proposition: a broad offering the firm could develop (de-identified) -------
+  // One altitude above a single deal — recurring appetite across several clients that
+  // is worth packaging into a proposition, not just chasing one project at a time.
+  for (const p of await buildPropositions()) {
+    mk({
+      id: p.id, family: "proposition", route: "leadership",
+      title: `Proposition: ${p.label}`,
+      detail: `${p.clients} clients across ${p.sectors.join(" · ")} show appetite — an offering the firm could develop`,
+      evidence: p.evidence,
+      support: { sectors: p.sectors, count: p.clients },
+      sector: p.sectors[0],
+      confidence: p.confidence, urgency: p.urgency,
+      soft: false, deIdentified: true,
+      actions: { draft: true, nominate: true },
+      proposition: p,
     });
   }
 

@@ -997,3 +997,8 @@ html, body {
 .offer-stress-h { font-family: var(--mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--risk); }
 .offer-stress ul { margin: 4px 0 0; padding-left: 16px; }
 .offer-stress li { font-size: 12px; color: var(--ink); line-height: 1.45; margin-top: 2px; }
+
+/* Follow-on & proposition blocks reuse the .offer join styling; a left accent
+   distinguishes the two altitudes (near-term relationship vs broad offering). */
+.sv-block { border-left: 3px solid var(--accent); }
+.sv-prop { border-left-color: var(--ink-3); }
