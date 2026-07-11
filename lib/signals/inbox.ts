@@ -20,8 +20,8 @@ import { queryAtoms } from "./atoms";
 import { accountHealth, riskEarlyWarnings, deliveryHealth, mitigationPlaybook } from "./temporal";
 import { detectWhitespace } from "./whitespace";
 import { buildOffer, type Offer } from "../offers";
-import { buildFollowOns, attachFollowOnLinks, type FollowOn, type Proposition } from "../followons";
-import { getDeepInsights, type TriangulatedInsight } from "../deep-insights";
+import { buildFollowOns, buildPropositions, attachFollowOnLinks, type FollowOn, type Proposition } from "../followons";
+import { readDeepInsights, type TriangulatedInsight } from "../deep-insights";
 import { connectedSignals } from "./connected";
 
 export type SignalFamily =
@@ -222,16 +222,19 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
     });
   }
 
-  // The latent layer (cached): delivery-theme + demand propositions, and the deep
-  // triangulated hypotheses. Expensive (Opus + web) but disk-cached by signal hash.
-  // Never let its failure break the feed — degrade to no latent layer.
-  const deep = await getDeepInsights().catch(() => ({ triangulated: [] as TriangulatedInsight[], propositions: [] as Proposition[] }));
+  // Propositions have two tiers, kept apart for COST: DEMAND props are deterministic
+  // (no LLM) so they're computed live here; the DELIVERY-theme props + triangulated
+  // hypotheses are the expensive latent layer, which we only READ from the cache that
+  // `npm run insights:build` produced — the hot inbox path never calls the model.
+  const demand = (await buildPropositions().catch(() => [] as Proposition[])).map((p) => ({ ...p, source: p.source ?? ("demand" as const) }));
+  const deep = await readDeepInsights().catch(() => ({ triangulated: [] as TriangulatedInsight[], deliveryPropositions: [] as Proposition[], stale: false, built: false }));
+  const propositions = [...demand, ...deep.deliveryPropositions].sort((a, b) => b.confidence - a.confidence);
 
   // ---- Follow-on: a named opening on an existing account (single-account) --------
   // The warmest lead the firm has — a live buying signal, anchored to the sponsor
   // who voiced it and matched to the adjacent thing we already sell. A bespoke ask is
   // then LINKED to the firm-level proposition/priced offer it maps to (cross-altitude).
-  const followOns = await attachFollowOnLinks(await buildFollowOns(), deep.propositions, offers);
+  const followOns = await attachFollowOnLinks(await buildFollowOns(), propositions, offers);
   for (const f of followOns) {
     mk({
       id: f.id, family: "follow-on", route: "sales",
@@ -250,7 +253,7 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
   // One altitude above a single deal. Two sources: DEMAND (clients keep asking) and
   // DELIVERY (a pattern in what we keep finding across engagements — from emergent
   // themes), each worth packaging rather than chasing one project at a time.
-  for (const p of deep.propositions) {
+  for (const p of propositions) {
     const detail = p.source === "delivery"
       ? `Recurring across ${p.clients} of our engagements (${p.sectors.join(" · ")}) — package what we already do`
       : `${p.clients} clients across ${p.sectors.join(" · ")} show appetite — an offering the firm could develop`;

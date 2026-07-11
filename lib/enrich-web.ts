@@ -14,8 +14,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic();
-const MODEL = "claude-opus-4-8";
-const WEB_SEARCH_TOOL = { type: "web_search_20260209", name: "web_search", max_uses: 3 } as const;
+// Summarising a couple of search results into one line does NOT need a frontier model —
+// Haiku keeps this cheap. (Web enrichment runs only in the insights build, not per load.)
+const MODEL = "claude-haiku-4-5";
+const WEB_SEARCH_TOOL = { type: "web_search_20260209", name: "web_search", max_uses: 2 } as const;
 
 // A short external-context line for a proposition/insight, or null if nothing useful.
 // `subject` = the thing to validate; `sector` = scope; `angle` = what to look for.

@@ -32,7 +32,7 @@ import { createHash } from "crypto";
 import { queryAtoms } from "./signals/atoms";
 import { riskEarlyWarnings } from "./signals/temporal";
 import { detectEmergentThemes } from "./triangulate";
-import { buildPropositions, type Proposition } from "./followons";
+import { type Proposition } from "./followons";
 import { enrichWithWeb } from "./enrich-web";
 
 const client = new Anthropic();
@@ -182,40 +182,47 @@ export async function deliveryThemePropositions(): Promise<Proposition[]> {
   }));
 }
 
-// Orchestrate + cache. Merges demand + delivery propositions, runs deep triangulation,
-// web-enriches the top of each, and caches by a hash of the signal set.
-export async function getDeepInsights(): Promise<{ triangulated: TriangulatedInsight[]; propositions: Proposition[] }> {
+function signalKey(): string {
   const atoms = queryAtoms({});
-  const key = createHash("sha1").update(atoms.map((a) => `${a.id}:${a.text}`).sort().join("|")).digest("hex");
+  return createHash("sha1").update(atoms.map((a) => `${a.id}:${a.text}`).sort().join("|")).digest("hex");
+}
 
-  try {
-    const cached = JSON.parse(await fs.readFile(CACHE, "utf8")) as { key: string; triangulated: TriangulatedInsight[]; propositions: Proposition[] };
-    if (cached.key === key) return { triangulated: cached.triangulated, propositions: cached.propositions };
-  } catch {
-    /* no cache / stale */
-  }
+type DeepCache = { key: string; triangulated: TriangulatedInsight[]; deliveryPropositions: Proposition[] };
 
-  // Demand propositions are DETERMINISTIC (no LLM) — they must survive even when the
-  // model layer is down. The triangulation + delivery themes degrade to empty on
-  // failure, so a missing key / exhausted credits never breaks the feed; it just
-  // loses the latent layer.
-  const [triangulated, demand, delivery] = await Promise.all([deepTriangulate(), buildPropositions().catch(() => [] as Proposition[]), deliveryThemePropositions()]);
-  const propositions = [...demand.map((p) => ({ ...p, source: p.source ?? ("demand" as const) })), ...delivery].sort((a, b) => b.confidence - a.confidence);
+/* computeDeepInsights — the EXPENSIVE synthesis (Opus triangulation + emergent themes
+   + web enrichment). Run it DELIBERATELY via `npm run insights:build`, NEVER on the
+   inbox read path — that's what made token spend spike. Writes the cache the feed reads. */
+export async function computeDeepInsights(): Promise<DeepCache> {
+  const [triangulated, deliveryPropositions] = await Promise.all([deepTriangulate(), deliveryThemePropositions()]);
 
-  // Web-enrich the top of each surface (bounded — one call each; enrichWithWeb already
-  // degrades to null on failure) so external context rides the highest-value items.
+  // Web-enrich only the TOP of each surface (Haiku, bounded; degrades to null on failure).
   if (triangulated[0]) {
     triangulated[0].webContext =
       (await enrichWithWeb(triangulated[0].insight, triangulated[0].sectors[0] ?? "", "market trends, sector shifts, or client-organisation context that bear on this hypothesis")) ?? undefined;
   }
-  if (propositions[0]) {
-    propositions[0].webContext = (await enrichWithWeb(propositions[0].label, propositions[0].sectors[0] ?? "")) ?? undefined;
+  if (deliveryPropositions[0]) {
+    deliveryPropositions[0].webContext = (await enrichWithWeb(deliveryPropositions[0].label, deliveryPropositions[0].sectors[0] ?? "")) ?? undefined;
   }
 
-  // Only cache a genuinely-computed latent layer — never persist a degraded (LLM-down)
-  // result as if valid, so it recomputes once the model is reachable again.
-  if (triangulated.length || delivery.length) {
-    await fs.writeFile(CACHE, JSON.stringify({ key, triangulated, propositions }, null, 2)).catch(() => {});
+  const cache: DeepCache = { key: signalKey(), triangulated, deliveryPropositions };
+  // Only persist a genuinely-computed layer — never overwrite good insights with a
+  // degraded (LLM-down) empty result.
+  if (triangulated.length || deliveryPropositions.length) {
+    await fs.mkdir(path.dirname(CACHE), { recursive: true }).catch(() => {});
+    await fs.writeFile(CACHE, JSON.stringify(cache, null, 2)).catch(() => {});
   }
-  return { triangulated, propositions };
+  return cache;
+}
+
+/* readDeepInsights — CACHE-ONLY, no LLM, safe on the hot path. Returns whatever the
+   last build produced (with a `stale` flag if the signals have changed since), or
+   empties if nothing has been built yet. The demand-side propositions are added by the
+   inbox itself (they're deterministic and cheap). */
+export async function readDeepInsights(): Promise<{ triangulated: TriangulatedInsight[]; deliveryPropositions: Proposition[]; stale: boolean; built: boolean }> {
+  try {
+    const c = JSON.parse(await fs.readFile(CACHE, "utf8")) as DeepCache;
+    return { triangulated: c.triangulated ?? [], deliveryPropositions: c.deliveryPropositions ?? [], stale: c.key !== signalKey(), built: true };
+  } catch {
+    return { triangulated: [], deliveryPropositions: [], stale: false, built: false };
+  }
 }
