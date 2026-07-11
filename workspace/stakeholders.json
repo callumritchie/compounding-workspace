@@ -28,5 +28,10 @@
     "name": "Priya Nair",
     "role": "CEO",
     "org": "beacon"
+  },
+  "vela-cpo": {
+    "name": "Sofia Almeida",
+    "role": "Chief Product Officer",
+    "org": "vela"
   }
 }

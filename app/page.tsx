@@ -341,7 +341,7 @@ type TriangulatedInsight = {
 type ConvergenceInsight = {
   id: string; client: string; sector: string; projects: string[];
   modalities: string[];
-  signals: { modality: string; source: string; project: string; text: string }[];
+  signals: { modality: string; source: string; project: string; text: string; provenance?: string }[];
   theme: string; kind: "risk" | "opportunity"; soWhat: string;
   confidence: number; urgency: number;
 };
@@ -1278,7 +1278,7 @@ export default function Home() {
           {c.signals.map((sig, i) => (
             <div className="tri-sig" key={i}>
               <span className="tri-sig-kind">{sig.modality}</span>
-              <span className="tri-sig-text">{sig.text}</span>
+              <span className="tri-sig-text">{sig.text}{sig.provenance ? <span className="tri-prov"> · {sig.provenance}</span> : null}</span>
             </div>
           ))}
         </div>

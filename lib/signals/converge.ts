@@ -19,19 +19,21 @@ import { cosine } from "../vectors";
 import { queryAtoms } from "./atoms";
 import { riskEarlyWarnings } from "./temporal";
 import { behavioralSignals } from "./behavioral";
+import { documentSignals } from "./documents";
 
-export type Modality = "client-voice" | "internal-voice" | "risk" | "behavioural";
+export type Modality = "client-voice" | "internal-voice" | "risk" | "behavioural" | "quant" | "finding" | "document";
 
 export type UnifiedSignal = {
   id: string;
-  modality: Modality | "behavioural";
+  modality: Modality;
   source: string; // the document / system it came from
   project: string;
   client: string;
   sector: string;
   theme: string; // the text we cluster + embed on
   ts?: string;
-  strength: number; // 0..1
+  strength: number; // 0..1 (already provenance-weighted for document signals)
+  provenance?: string; // legible provenance label, e.g. "client-supplied · 3yr old · stale"
 };
 
 export type ConvergenceInsight = {
@@ -40,7 +42,7 @@ export type ConvergenceInsight = {
   sector: string;
   projects: string[];
   modalities: string[]; // the distinct modalities that converged
-  signals: { modality: string; source: string; project: string; text: string }[]; // the trail
+  signals: { modality: string; source: string; project: string; text: string; provenance?: string }[]; // the trail
   theme: string;
   kind: "risk" | "opportunity";
   soWhat: string;
@@ -55,6 +57,9 @@ const MODALITY_LABEL: Record<string, string> = {
   "internal-voice": "team flagged internally",
   risk: "risk register",
   behavioural: "engagement behaviour",
+  quant: "quant data",
+  finding: "our finding",
+  document: "supplied document",
 };
 
 // Every signal the firm holds, normalised to one shape with its modality + source.
@@ -82,6 +87,7 @@ export async function gatherSignals(): Promise<UnifiedSignal[]> {
   }
 
   for (const b of await behavioralSignals()) out.push(b);
+  for (const d of await documentSignals()) out.push(d);
 
   return out;
 }
@@ -145,7 +151,7 @@ export async function accountConvergence(): Promise<ConvergenceInsight[]> {
         client, sector: members[0].sector,
         projects,
         modalities,
-        signals: members.map((m) => ({ modality: MODALITY_LABEL[m.modality] ?? m.modality, source: m.source, project: m.project, text: m.theme })),
+        signals: members.map((m) => ({ modality: MODALITY_LABEL[m.modality] ?? m.modality, source: m.source, project: m.project, text: m.theme, provenance: m.provenance })),
         theme: rep.theme,
         kind: isRisk ? "risk" : "opportunity",
         soWhat: isRisk

@@ -1014,3 +1014,4 @@ html, body {
 .tri-sig-text { color: var(--ink); }
 .offer-web { margin-top: 9px; padding: 8px 10px; background: var(--surface-2); border: 1px dashed var(--border); border-radius: var(--r-sm); font-size: 12px; line-height: 1.5; color: var(--ink); }
 .offer-web-h { font-family: var(--mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-2); margin-right: 6px; }
+.tri-prov { color: var(--ink-3); font-family: var(--mono); font-size: 10.5px; }
