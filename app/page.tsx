@@ -315,6 +315,7 @@ type InboxSignal = {
   followOn?: FollowOn; // follow-on only: named opening + adjacent move (lib/followons)
   proposition?: Proposition; // proposition only: broad offering the firm could develop
   triangulated?: TriangulatedInsight; // triangulated only: cross-signal hypothesis
+  convergence?: ConvergenceInsight; // convergence only: independent modalities agreeing
 };
 // Stakeholder-value plane (mirror of lib/followons).
 type FollowOnLink = { proposition: string; priceLow?: number; priceHigh?: number };
@@ -336,6 +337,13 @@ type TriangulatedInsight = {
   kind: "risk" | "opportunity" | "positioning" | "delivery";
   connected: ConnectedSignal[]; projects: string[]; clients: string[]; sectors: string[];
   confidence: number; deIdentified: boolean; webContext?: string;
+};
+type ConvergenceInsight = {
+  id: string; client: string; sector: string; projects: string[];
+  modalities: string[];
+  signals: { modality: string; source: string; project: string; text: string }[];
+  theme: string; kind: "risk" | "opportunity"; soWhat: string;
+  confidence: number; urgency: number;
 };
 // The Offer join (mirror of lib/offers): whitespace demand × pricing × staffing.
 type OfferPrice = { low: number; high: number; median: number; margin: number; bookMargin: number; comparables: number } | null;
@@ -1050,6 +1058,7 @@ export default function Home() {
     if (s.soft) return "fyi";
     if (["churn", "early-warning", "delivery-health"].includes(s.family)) return "risk";
     if (s.family === "triangulated") return s.triangulated?.kind === "risk" ? "risk" : "opp";
+    if (s.family === "convergence") return s.convergence?.kind === "risk" ? "risk" : "opp";
     if (["buying", "competitive", "new-service-line", "follow-on", "proposition"].includes(s.family)) return "opp";
     return "fyi";
   }
@@ -1248,6 +1257,35 @@ export default function Home() {
     );
   }
 
+  // Convergence block — deterministic multi-modal agreement. Like triangulation but
+  // it's a FACT-convergence (several independent sources line up), not an inferred
+  // hypothesis, so it leads with the agreement and shows every source in the trail.
+  function renderConvergenceBlock(c: ConvergenceInsight) {
+    return (
+      <div className="offer sv-block tri-block">
+        <div className="offer-h">
+          <span className="offer-badge">🎯 Convergence</span>
+          <span className="offer-sub">{c.modalities.length} independent modalities agree · {c.projects.length} engagement{c.projects.length === 1 ? "" : "s"}</span>
+        </div>
+        <div className="offer-grid">
+          <div className="offer-leg">
+            <span className="offer-k">So what</span>
+            <span className="offer-v"><b>{c.soWhat}</b></span>
+          </div>
+        </div>
+        <div className="tri-trail">
+          <div className="tri-trail-h">Converges from {c.signals.length} signals — no single one carries it</div>
+          {c.signals.map((sig, i) => (
+            <div className="tri-sig" key={i}>
+              <span className="tri-sig-kind">{sig.modality}</span>
+              <span className="tri-sig-text">{sig.text}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   function renderInsightCard(s: InboxSignal) {
     const cm = confMeta(s.confidence);
     const mine = s.route === myRoute;
@@ -1287,6 +1325,7 @@ export default function Home() {
         {s.followOn && renderFollowOnBlock(s.followOn)}
         {s.proposition && renderPropositionBlock(s.proposition)}
         {s.triangulated && renderTriangulatedBlock(s.triangulated)}
+        {s.convergence && renderConvergenceBlock(s.convergence)}
 
         <div className="conf-row">
           <span className={`conf-badge conf-${cm.level}`}><span className="conf-meter">{cm.meter}</span> {cm.label}</span>
@@ -1415,6 +1454,7 @@ export default function Home() {
       "follow-on": { icon: "🤝", label: "follow-on" },
       proposition: { icon: "🧭", label: "proposition" },
       triangulated: { icon: "🔗", label: "triangulated" },
+      convergence: { icon: "🎯", label: "convergence" },
       pipeline: { icon: "📊", label: "pipeline" },
       resourcing: { icon: "🧑‍💼", label: "resourcing" },
       pricing: { icon: "💷", label: "pricing" },
@@ -1460,6 +1500,7 @@ export default function Home() {
       "new-service-line": { label: "Expand the offer", kind: "opp", order: 2 },
       proposition: { label: "New proposition", kind: "opp", order: 2.2 },
       triangulated: { label: "Triangulated insight", kind: "opp", order: 2.4 },
+      convergence: { label: "Converging signals", kind: "risk", order: 0.5 },
       pricing: { label: "Pricing & margin", kind: "opp", order: 2.5 },
       competitive: { label: "Competitive", kind: "deliv", order: 3 },
       objection: { label: "Objection / positioning", kind: "deliv", order: 4 },

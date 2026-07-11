@@ -22,6 +22,7 @@ import { detectWhitespace } from "./whitespace";
 import { buildOffer, type Offer } from "../offers";
 import { buildFollowOns, buildPropositions, attachFollowOnLinks, type FollowOn, type Proposition } from "../followons";
 import { readDeepInsights, type TriangulatedInsight } from "../deep-insights";
+import { accountConvergence, type ConvergenceInsight } from "./converge";
 import { connectedSignals } from "./connected";
 
 export type SignalFamily =
@@ -31,6 +32,8 @@ export type SignalFamily =
   | "follow-on" | "proposition"
   // The latent layer: a non-obvious hypothesis triangulated across scattered signals.
   | "triangulated"
+  // Deterministic convergence: several independent modalities agreeing on one thing.
+  | "convergence"
   // Connected-workspace families (demo): sourced from mocked MCP connectors, not the corpus.
   | "pipeline" | "resourcing" | "pricing";
 
@@ -65,6 +68,7 @@ export type InboxSignal = {
   followOn?: FollowOn; // follow-on only: the named opening + adjacent move (see lib/followons.ts)
   proposition?: Proposition; // proposition only: the broad offering the firm could develop
   triangulated?: TriangulatedInsight; // triangulated only: the non-obvious cross-signal hypothesis
+  convergence?: ConvergenceInsight; // convergence only: independent modalities agreeing (deterministic)
 };
 
 const CONF_THRESHOLD = 0.6; // below this, a transcript-derived signal is "soft"
@@ -91,6 +95,8 @@ const VISIBILITY: Record<SignalFamily, (user: string) => boolean> = {
   // Triangulated insights can synthesise from internal candour (delivery-risk atoms),
   // so — like delivery-health — they stay with the lead rather than broadcast.
   triangulated: (u) => canSeeDeliveryHealth(u),
+  // Convergence can include the team's internal candour → lead-only, same as above.
+  convergence: (u) => canSeeDeliveryHealth(u),
   // Connected-workspace (demo) families ride the same open inbox as the rest.
   pipeline: () => true,
   resourcing: () => true,
@@ -99,6 +105,15 @@ const VISIBILITY: Record<SignalFamily, (user: string) => boolean> = {
 
 const userRoute = (user: string): SignalRoute =>
   roleOf(user) === "sales" ? "sales" : roleOf(user) === "marketing" ? "marketing" : "leadership";
+
+// Novelty weight by family: multi-source, synthesised reads are worth surfacing over
+// a single obvious quote. >1 lifts the non-obvious; <1 sinks the already-known.
+const NOVELTY = (family: SignalFamily): number => {
+  if (family === "convergence" || family === "triangulated") return 1.3; // several independent signals agree
+  if (family === "new-service-line" || family === "proposition" || family === "risk-playbook") return 1.15; // cross-client synthesis
+  if (family === "buying" || family === "objection" || family === "competitive") return 0.82; // single obvious quote
+  return 1; // follow-on, churn, early-warning, delivery-health, connected — as-is
+};
 
 function freshness(ts?: string): { f: number; ageDays?: number } {
   if (!ts) return { f: 0.55 }; // timeless signals get a neutral weight
@@ -112,7 +127,10 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
   const mk = (s: Omit<InboxSignal, "score" | "ageDays">): void => {
     const { f, ageDays } = freshness(s.ts);
     const roleMatch = s.route === userRoute(user) ? 1.25 : 1;
-    const score = Number((s.confidence * s.urgency * f * roleMatch).toFixed(4));
+    // Novelty as a ranking principle: reward insights built from MANY independent
+    // signals, penalise the single obvious quote a consultant already caught. This is
+    // what makes the feed lead with "what you'd miss" instead of "what you already know".
+    const score = Number((s.confidence * s.urgency * f * roleMatch * NOVELTY(s.family)).toFixed(4));
     raw.push({ ...s, ageDays, score });
   };
 
@@ -226,6 +244,24 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
   // (no LLM) so they're computed live here; the DELIVERY-theme props + triangulated
   // hypotheses are the expensive latent layer, which we only READ from the cache that
   // `npm run insights:build` produced — the hot inbox path never calls the model.
+  // ---- Convergence: independent modalities agreeing (DETERMINISTIC, always-on) -----
+  // The non-obvious floor: where the client's voice, the team's internal candour, the
+  // risk register and the engagement's behaviour line up on the same thing. No LLM.
+  for (const c of await accountConvergence().catch(() => [])) {
+    mk({
+      id: c.id, family: "convergence", route: "leadership",
+      title: `${c.client}: ${c.modalities.length} independent signals converge`,
+      detail: c.theme,
+      evidence: c.signals.map((s) => s.text),
+      support: { sectors: [c.sector], projects: c.projects, count: c.signals.length },
+      project: c.projects[0], client: c.client, sector: c.sector,
+      confidence: c.confidence, urgency: c.urgency, ts: c.ts,
+      soft: false, deIdentified: false,
+      actions: { draft: false, nominate: true },
+      convergence: c,
+    });
+  }
+
   const demand = (await buildPropositions().catch(() => [] as Proposition[])).map((p) => ({ ...p, source: p.source ?? ("demand" as const) }));
   const deep = await readDeepInsights().catch(() => ({ triangulated: [] as TriangulatedInsight[], deliveryPropositions: [] as Proposition[], stale: false, built: false }));
   const propositions = [...demand, ...deep.deliveryPropositions].sort((a, b) => b.confidence - a.confidence);
