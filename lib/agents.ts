@@ -30,11 +30,16 @@ export type Agent = {
 // The default agent every chat runs unless one is explicitly assigned. It is the
 // LEAD (deep) agent so the system auto-orchestrates — plans the work and delegates
 // to specialists — rather than making the user pick an agent per chat.
-export const DEFAULT_AGENT_ID = "lead-consultant";
+// The DEFAULT chat agent is the plain, single-loop teammate — NOT the deep agent.
+// The deep agent (lead-consultant) delegates to subagents, each a full model run, so
+// making it the default multiplied token spend on every everyday chat. Pick it (or a
+// specialist) deliberately from the 🤖 picker when the depth is worth the cost.
+export const DEFAULT_AGENT_ID = "consulting-teammate";
 const ALL_TOOLS = TOOLS.map((t) => t.name);
 // The deep-agent harness tools (plan + delegate) — granted only to the lead agent.
 const DEEP_TOOL_NAMES = DEEP_TOOLS.map((t) => t.name);
-const MODEL = "claude-opus-4-8";
+const MODEL = "claude-opus-4-8"; // specialists + the deep agent; the everyday default runs cheaper (Sonnet)
+const DEFAULT_MODEL = "claude-sonnet-5"; // the general teammate — cheap by default
 
 const DIR = path.join(process.cwd(), "workspace", "agents");
 
@@ -46,7 +51,7 @@ const SEED: Agent[] = [
     name: "Consulting teammate",
     description: "General-purpose teammate — grounded, concise, weighs memory by trust.",
     systemPrompt: SYSTEM_BASE,
-    model: MODEL,
+    model: DEFAULT_MODEL,
     tools: ALL_TOOLS,
   },
   {

@@ -19,11 +19,21 @@ import { roleOf, canAccessSpace, canSeeDeliveryHealth } from "../team";
 import { queryAtoms } from "./atoms";
 import { accountHealth, riskEarlyWarnings, deliveryHealth, mitigationPlaybook } from "./temporal";
 import { detectWhitespace } from "./whitespace";
+import { buildOffer, type Offer } from "../offers";
+import { buildFollowOns, buildPropositions, attachFollowOnLinks, type FollowOn, type Proposition } from "../followons";
+import { readDeepInsights, type TriangulatedInsight } from "../deep-insights";
+import { accountConvergence, type ConvergenceInsight } from "./converge";
 import { connectedSignals } from "./connected";
 
 export type SignalFamily =
   | "buying" | "competitive" | "objection" | "churn"
   | "early-warning" | "delivery-health" | "risk-playbook" | "new-service-line"
+  // Stakeholder-value families: a named follow-on opening + a broad firm proposition.
+  | "follow-on" | "proposition"
+  // The latent layer: a non-obvious hypothesis triangulated across scattered signals.
+  | "triangulated"
+  // Deterministic convergence: several independent modalities agreeing on one thing.
+  | "convergence"
   // Connected-workspace families (demo): sourced from mocked MCP connectors, not the corpus.
   | "pipeline" | "resourcing" | "pricing";
 
@@ -54,6 +64,11 @@ export type InboxSignal = {
   actions: { draft: boolean; nominate: boolean }; // which in-place actions apply
   source?: ConnectedSource; // set only on connected-workspace (demo) signals
   note?: string; // plain-language gloss shown in the evidence panel (e.g. how a score is built)
+  offer?: Offer; // new-service-line only: the priced, staffable Offer join (see lib/offers.ts)
+  followOn?: FollowOn; // follow-on only: the named opening + adjacent move (see lib/followons.ts)
+  proposition?: Proposition; // proposition only: the broad offering the firm could develop
+  triangulated?: TriangulatedInsight; // triangulated only: the non-obvious cross-signal hypothesis
+  convergence?: ConvergenceInsight; // convergence only: independent modalities agreeing (deterministic)
 };
 
 const CONF_THRESHOLD = 0.6; // below this, a transcript-derived signal is "soft"
@@ -73,6 +88,15 @@ const VISIBILITY: Record<SignalFamily, (user: string) => boolean> = {
   "early-warning": () => true,
   "risk-playbook": () => true,
   "delivery-health": (u) => canSeeDeliveryHealth(u), // sensitive team-candour → lead only
+  // Stakeholder-value families are open to the team (follow-on is single-account,
+  // proposition is de-identified aggregate — both safe to surface broadly).
+  "follow-on": () => true,
+  proposition: () => true,
+  // Triangulated insights can synthesise from internal candour (delivery-risk atoms),
+  // so — like delivery-health — they stay with the lead rather than broadcast.
+  triangulated: (u) => canSeeDeliveryHealth(u),
+  // Convergence can include the team's internal candour → lead-only, same as above.
+  convergence: (u) => canSeeDeliveryHealth(u),
   // Connected-workspace (demo) families ride the same open inbox as the rest.
   pipeline: () => true,
   resourcing: () => true,
@@ -81,6 +105,15 @@ const VISIBILITY: Record<SignalFamily, (user: string) => boolean> = {
 
 const userRoute = (user: string): SignalRoute =>
   roleOf(user) === "sales" ? "sales" : roleOf(user) === "marketing" ? "marketing" : "leadership";
+
+// Novelty weight by family: multi-source, synthesised reads are worth surfacing over
+// a single obvious quote. >1 lifts the non-obvious; <1 sinks the already-known.
+const NOVELTY = (family: SignalFamily): number => {
+  if (family === "convergence" || family === "triangulated") return 1.3; // several independent signals agree
+  if (family === "new-service-line" || family === "proposition" || family === "risk-playbook") return 1.15; // cross-client synthesis
+  if (family === "buying" || family === "objection" || family === "competitive") return 0.82; // single obvious quote
+  return 1; // follow-on, churn, early-warning, delivery-health, connected — as-is
+};
 
 function freshness(ts?: string): { f: number; ageDays?: number } {
   if (!ts) return { f: 0.55 }; // timeless signals get a neutral weight
@@ -94,7 +127,10 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
   const mk = (s: Omit<InboxSignal, "score" | "ageDays">): void => {
     const { f, ageDays } = freshness(s.ts);
     const roleMatch = s.route === userRoute(user) ? 1.25 : 1;
-    const score = Number((s.confidence * s.urgency * f * roleMatch).toFixed(4));
+    // Novelty as a ranking principle: reward insights built from MANY independent
+    // signals, penalise the single obvious quote a consultant already caught. This is
+    // what makes the feed lead with "what you'd miss" instead of "what you already know".
+    const score = Number((s.confidence * s.urgency * f * roleMatch * NOVELTY(s.family)).toFixed(4));
     raw.push({ ...s, ageDays, score });
   };
 
@@ -180,17 +216,113 @@ export async function buildInbox(user: string): Promise<{ signals: InboxSignal[]
     });
   }
 
-  // ---- New service lines / whitespace (aggregate, de-identified: sectors + count) ----
+  // ---- New service lines / whitespace, JOINED into a priced, staffable Offer ------
+  // The whitespace demand is only the first leg. buildOffer couples it to pricing
+  // comparables and the resourcing bench, so the card carries a real range, a
+  // staffing read, and a weakest-link confidence — the insight no single tool holds.
+  const offers: Offer[] = [];
   for (const w of await detectWhitespace()) {
+    const offer = await buildOffer(w);
+    offers.push(offer);
+    const priced = offer.price ? ` · ~£${Math.round(offer.price.low / 1000)}k–£${Math.round(offer.price.high / 1000)}k` : "";
     mk({
       id: `ws:${w.need.slice(0, 40)}`, family: "new-service-line", route: "leadership",
       title: `Whitespace: ${w.need}`,
-      detail: `${w.count} clients across ${w.sectors.join(" · ")} asking — not in our catalogue`,
+      detail: `${w.count} clients across ${w.sectors.join(" · ")} asking — not in our catalogue${priced}`,
       evidence: w.evidence,
       support: { sectors: w.sectors, count: w.count },
-      confidence: Math.min(0.9, 0.5 + w.count * 0.1), urgency: 0.4,
+      // Confidence is the joined weakest-link read (demand × price × staffing), not
+      // demand alone — an offer we can't staff or price shouldn't read as High.
+      confidence: offer.confidence, urgency: 0.5,
       soft: false, deIdentified: true,
       actions: { draft: true, nominate: true },
+      offer,
+    });
+  }
+
+  // Propositions have two tiers, kept apart for COST: DEMAND props are deterministic
+  // (no LLM) so they're computed live here; the DELIVERY-theme props + triangulated
+  // hypotheses are the expensive latent layer, which we only READ from the cache that
+  // `npm run insights:build` produced — the hot inbox path never calls the model.
+  // ---- Convergence: independent modalities agreeing (DETERMINISTIC, always-on) -----
+  // The non-obvious floor: where the client's voice, the team's internal candour, the
+  // risk register and the engagement's behaviour line up on the same thing. No LLM.
+  for (const c of await accountConvergence().catch(() => [])) {
+    mk({
+      id: c.id, family: "convergence", route: "leadership",
+      title: `${c.client}: ${c.modalities.length} independent signals converge`,
+      detail: c.theme,
+      evidence: c.signals.map((s) => s.text),
+      support: { sectors: [c.sector], projects: c.projects, count: c.signals.length },
+      project: c.projects[0], client: c.client, sector: c.sector,
+      confidence: c.confidence, urgency: c.urgency, ts: c.ts,
+      soft: false, deIdentified: false,
+      actions: { draft: false, nominate: true },
+      convergence: c,
+    });
+  }
+
+  const demand = (await buildPropositions().catch(() => [] as Proposition[])).map((p) => ({ ...p, source: p.source ?? ("demand" as const) }));
+  const deep = await readDeepInsights().catch(() => ({ triangulated: [] as TriangulatedInsight[], deliveryPropositions: [] as Proposition[], stale: false, built: false }));
+  const propositions = [...demand, ...deep.deliveryPropositions].sort((a, b) => b.confidence - a.confidence);
+
+  // ---- Follow-on: a named opening on an existing account (single-account) --------
+  // The warmest lead the firm has — a live buying signal, anchored to the sponsor
+  // who voiced it and matched to the adjacent thing we already sell. A bespoke ask is
+  // then LINKED to the firm-level proposition/priced offer it maps to (cross-altitude).
+  const followOns = await attachFollowOnLinks(await buildFollowOns(), propositions, offers);
+  for (const f of followOns) {
+    mk({
+      id: f.id, family: "follow-on", route: "sales",
+      title: f.contact ? `Follow-on at ${f.client} — ${f.contact.name} is ready to talk` : `Follow-on opening at ${f.client}`,
+      detail: `${f.move}${f.contact ? ` · ${f.contact.name}, ${f.contact.role}` : " · no named sponsor on record"}`,
+      evidence: [f.evidence].filter(Boolean),
+      project: f.project, client: f.client, sector: f.sector,
+      confidence: f.confidence, urgency: f.urgency, ts: f.ts,
+      soft: f.confidence < CONF_THRESHOLD, deIdentified: false,
+      actions: { draft: true, nominate: false },
+      followOn: f,
+    });
+  }
+
+  // ---- Proposition: a broad offering the firm could develop (de-identified) -------
+  // One altitude above a single deal. Two sources: DEMAND (clients keep asking) and
+  // DELIVERY (a pattern in what we keep finding across engagements — from emergent
+  // themes), each worth packaging rather than chasing one project at a time.
+  for (const p of propositions) {
+    const detail = p.source === "delivery"
+      ? `Recurring across ${p.clients} of our engagements (${p.sectors.join(" · ")}) — package what we already do`
+      : `${p.clients} clients across ${p.sectors.join(" · ")} show appetite — an offering the firm could develop`;
+    mk({
+      id: p.id, family: "proposition", route: "leadership",
+      title: `Proposition: ${p.label}`,
+      detail,
+      evidence: p.evidence,
+      support: { sectors: p.sectors, count: p.clients },
+      sector: p.sectors[0],
+      confidence: p.confidence, urgency: p.urgency,
+      soft: false, deIdentified: true,
+      actions: { draft: true, nominate: true },
+      proposition: p,
+    });
+  }
+
+  // ---- Triangulated: the non-obvious hypothesis (the latent layer) ----------------
+  // Not a restated quote — an insight that only emerges from CONNECTING scattered
+  // signals across engagements or of different kinds. Surfaced as a hypothesis to
+  // investigate, carrying the exact signals it joined (the audit trail).
+  for (const t of deep.triangulated) {
+    mk({
+      id: t.id, family: "triangulated", route: "leadership",
+      title: t.insight,
+      detail: t.soWhat,
+      evidence: t.connected.map((c) => c.text),
+      support: { sectors: t.sectors, projects: t.projects, clients: t.deIdentified ? undefined : t.clients, count: t.connected.length },
+      sector: t.sectors[0],
+      confidence: t.confidence, urgency: t.kind === "risk" ? 0.75 : 0.5,
+      soft: false, deIdentified: t.deIdentified,
+      actions: { draft: true, nominate: true },
+      triangulated: t,
     });
   }
 

@@ -253,6 +253,22 @@ export async function search(query: string, project: string, k = 5): Promise<Sea
   return fused.map((r) => ({ file: r.file, text: r.text, score: r.score }));
 }
 
+// The single best RAW cosine similarity of any chunk in a project to the query, in
+// [0, 1]. Unlike search()'s fused RANK score (where #1 is ~1 however weak the match),
+// this is an ABSOLUTE measure — so a caller can ask "does the corpus address this at
+// all?" A low value means nothing in the files comes close. Used by the Findings
+// engine to detect an objective the corpus doesn't yet speak to (lib/findings.ts).
+export async function topSimilarity(query: string, project: string): Promise<number> {
+  await ensureDir();
+  const db = getDb();
+  const qvec = encode(await embedOne(query));
+  const row = db
+    .prepare("SELECT distance FROM vec_chunks WHERE embedding MATCH ? AND k = 1 AND project = ? ORDER BY distance")
+    .get(qvec, project) as { distance: number } | undefined;
+  if (!row) return 0;
+  return Math.max(0, Math.min(1, 1 - row.distance)); // cosine distance → similarity
+}
+
 export type CrossResult = SearchResult & { project: string };
 
 // Cross-project HYBRID search — the fine layer of cross-project retrieval.

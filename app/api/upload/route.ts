@@ -10,6 +10,7 @@ import { extractText } from "@/lib/ingest";
 import { writeFile, DEFAULT_PROJECT } from "@/lib/corpus";
 import { addFileToIndex } from "@/lib/vectors";
 import { suggestFromFile } from "@/lib/agent";
+import { detectContradictions } from "@/lib/findings";
 
 export async function POST(req: Request) {
   const form = await req.formData();
@@ -45,6 +46,11 @@ export async function POST(req: Request) {
   } catch {
     /* leave suggestions empty */
   }
+
+  // Flag any direct contradiction between this upload and what the team already
+  // holds true — surfaced as an in-project finding. Fire-and-forget; never blocks
+  // (or fails) the upload.
+  void detectContradictions(project, rel, text);
 
   return Response.json({ file: rel, chunks, suggestions });
 }

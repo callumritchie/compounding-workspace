@@ -24,7 +24,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic();
-const JUDGE_MODEL = "claude-opus-4-8"; // grade with a strong, separate model
+// The eval GATE grades with a strong, separate model (default). The LIVE per-answer
+// check (detectUngroundedClaim) passes a cheaper model — it's a best-effort flag, run
+// on every chat answer, so it shouldn't cost frontier tokens each time.
+const JUDGE_MODEL = "claude-opus-4-8";
 
 export type FaithfulnessVerdict = {
   faithfulness: number; // 0..1
@@ -65,14 +68,17 @@ function parseVerdict(raw: string): FaithfulnessVerdict {
   }
 }
 
-export async function judgeAnswer(input: {
-  question: string;
-  answer: string;
-  evidence: string;
-}): Promise<FaithfulnessVerdict> {
+export async function judgeAnswer(
+  input: {
+    question: string;
+    answer: string;
+    evidence: string;
+  },
+  opts?: { model?: string }
+): Promise<FaithfulnessVerdict> {
   const evidence = input.evidence.trim() || "(no evidence was retrieved)";
   const resp = await client.messages.create({
-    model: JUDGE_MODEL,
+    model: opts?.model ?? JUDGE_MODEL,
     max_tokens: 700,
     system: SYSTEM,
     messages: [

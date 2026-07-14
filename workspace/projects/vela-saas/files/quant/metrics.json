@@ -1,0 +1,36 @@
+{
+  "origin": "firm",
+  "authored": "2026-07-05",
+  "doctype": "quant",
+  "note": "Pulled from Vela's product analytics during the diagnostic.",
+  "metrics": [
+    {
+      "label": "Trial-to-paid conversion",
+      "unit": "%",
+      "note": "self-serve funnel",
+      "series": [
+        { "period": "Q3-25", "value": 24 },
+        { "period": "Q4-25", "value": 20 },
+        { "period": "Q1-26", "value": 17 }
+      ]
+    },
+    {
+      "label": "Day-7 activation rate",
+      "unit": "%",
+      "note": "reached first-value moment",
+      "series": [
+        { "period": "Q3-25", "value": 48 },
+        { "period": "Q4-25", "value": 43 },
+        { "period": "Q1-26", "value": 39 }
+      ]
+    },
+    {
+      "label": "Net revenue retention",
+      "unit": "%",
+      "series": [
+        { "period": "Q3-25", "value": 108 },
+        { "period": "Q1-26", "value": 111 }
+      ]
+    }
+  ]
+}

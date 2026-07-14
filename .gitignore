@@ -19,6 +19,9 @@ workspace/projects/*/kickoff.json
 # Derived per-project next-actions ("Compass") cache (regenerates from state)
 workspace/projects/*/compass.json
 
+# Derived per-project finding-preview drafts cache (regenerates on demand)
+workspace/projects/*/previews.json
+
 # OS
 .DS_Store
 

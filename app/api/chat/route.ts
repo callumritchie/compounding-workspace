@@ -21,6 +21,7 @@ import {
   type Message,
 } from "@/lib/workspace";
 import { runAgent, type AgentEvent } from "@/lib/agent";
+import { detectUngroundedClaim } from "@/lib/findings";
 import { buildWorkingContext } from "@/lib/context";
 import { getEngagement, engagementDigest } from "@/lib/engagement";
 import { getObjectives, objectivesDigest } from "@/lib/objectives";
@@ -169,6 +170,16 @@ export async function POST(req: Request) {
         const assistantMessage: Message = { role: "assistant", content: result.text, meta };
         history.push(assistantMessage);
         await saveChatHistory(user, chatId, history);
+
+        // Grade the answer's grounding (fire-and-forget, never blocks the reply): if it
+        // made a claim the retrieved passages don't support, it becomes an in-project
+        // "ungrounded-claim" finding to verify. Evidence = what the agent actually saw.
+        const seenEvidence = result.trace
+          .filter((t) => t.tool === "semantic_search" || t.tool === "search_files" || t.tool === "read_file")
+          .map((t) => t.result)
+          .join("\n\n")
+          .slice(0, 8000);
+        void detectUngroundedClaim({ project, question: message, answer: result.text, evidence: seenEvidence });
 
         // Update this tab's metadata (auto-title, last message, open file).
         const currentMeta = allChats.find((c) => c.chatId === chatId);

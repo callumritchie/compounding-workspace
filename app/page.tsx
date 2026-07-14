@@ -311,13 +311,83 @@ type InboxSignal = {
   source?: "clickup" | "drive" | "pricing"; // connected-workspace (demo) provenance
   note?: string; // plain-language gloss shown in the evidence panel
   assessment?: SignalAssessment; // auditable confidence read (mirror of lib/signals/assess)
+  offer?: Offer; // new-service-line only: the priced, staffable Offer join (lib/offers)
+  followOn?: FollowOn; // follow-on only: named opening + adjacent move (lib/followons)
+  proposition?: Proposition; // proposition only: broad offering the firm could develop
+  triangulated?: TriangulatedInsight; // triangulated only: cross-signal hypothesis
+  convergence?: ConvergenceInsight; // convergence only: independent modalities agreeing
+  state?: { state: "owned" | "resolved" | "snoozed" | "reopened"; actor: string; ts: string }; // lifecycle
+  aged?: boolean; // stale + low-value + untouched → folded away
+  clarify?: { q: string; why: string }[]; // 1–3 questions whose answers would firm this up
+};
+// Stakeholder-value plane (mirror of lib/followons).
+type FollowOnLink = { proposition: string; priceLow?: number; priceHigh?: number };
+type FollowOn = {
+  id: string; project: string; client: string; sector: string;
+  contact: { name: string; role: string } | null;
+  headline: string; move: string; offering: string | null;
+  evidence: string; confidence: number; urgency: number; ts?: string; stressTest: string[];
+  link?: FollowOnLink;
+};
+type Proposition = {
+  id: string; theme: string; label: string; clients: number; sectors: string[];
+  evidence: string[]; confidence: number; urgency: number; stressTest: string[];
+  source?: "demand" | "delivery"; soWhat?: string; webContext?: string;
+};
+type ConnectedSignal = { ref: string; type: string; project: string; sector: string; text: string };
+type TriangulatedInsight = {
+  id: string; insight: string; why: string; soWhat: string;
+  kind: "risk" | "opportunity" | "positioning" | "delivery";
+  connected: ConnectedSignal[]; projects: string[]; clients: string[]; sectors: string[];
+  confidence: number; deIdentified: boolean; webContext?: string;
+};
+type ConvergenceInsight = {
+  id: string; client: string; sector: string; projects: string[];
+  modalities: string[];
+  signals: { modality: string; source: string; project: string; text: string; provenance?: string }[];
+  theme: string; kind: "risk" | "opportunity"; soWhat: string;
+  confidence: number; urgency: number;
+};
+// The Offer join (mirror of lib/offers): whitespace demand × pricing × staffing.
+type OfferPrice = { low: number; high: number; median: number; margin: number; bookMargin: number; comparables: number } | null;
+type OfferStaffing = { band: "deliverable" | "tight" | "gap"; available: { name: string; grade: string; rollsOffInDays: number }[]; gapNote?: string };
+type OfferFit = { coverage: number; nearest: string; kind: "extension" | "new-capability" };
+type Offer = {
+  need: string;
+  demand: { count: number; sectors: string[]; clients: string[]; evidence: string[]; oldestDays?: number };
+  price: OfferPrice;
+  staffing: OfferStaffing;
+  fit: OfferFit;
+  confidence: number;
+  legs: { demand: number; price: number; staffing: number };
+  stressTest: string[];
 };
 // Auditable confidence: the real drivers behind a rating + the counter-check.
 type ConfFactor = { label: string; status: "strong" | "moderate" | "weak"; detail: string };
 type SignalAssessment = { band: "high" | "medium" | "low"; factors: ConfFactor[]; caveats: string[] };
+// An in-project FINDING (mirror of lib/findings): a detected, evidence-anchored
+// observation about THIS engagement — the grounded replacement for the old
+// generative offer nudge. Carries verbatim provenance + an auditable confidence read.
+type ProjectFinding = {
+  id: string;
+  project: string;
+  kind: "rising-risk" | "unanswered-objective" | "ungrounded-claim" | "contradiction";
+  title: string;
+  detail: string;
+  evidence: { quote: string; source: string }[];
+  confidence: number;
+  urgency: number;
+  trigger: string; // "why now"
+  score: number;
+  action?: { title: string; prompt: string };
+  assessment: SignalAssessment;
+};
+// A finding's cheap DRAFT starter (the "already did a bit for you" proof-of-value).
+type FindingPreview = { heading: string; body: string };
 // The shared human layer over a surfaced insight (mirror of lib/signals/annotations).
-type Annotation = { id: number; signalId: string; author: string; kind: "context" | "correction" | "nullify"; body: string; ts: string };
-type AnnotationRollup = { notes: Annotation[]; count: number; nullified: boolean; nullifiedBy?: string; nullifyReason?: string };
+type AnnKind = "context" | "correction" | "nullify" | "comment";
+type Annotation = { id: number; signalId: string; author: string; kind: AnnKind; body: string; ts: string };
+type AnnotationRollup = { notes: Annotation[]; refinements: Annotation[]; comments: Annotation[]; count: number; nullified: boolean; nullifiedBy?: string; nullifyReason?: string };
 type ImpactStats = {
   totalReuses: number;
   distinctInsights: number;
@@ -378,6 +448,21 @@ export default function Home() {
   // forget so it never blocks a turn; refreshed as the engagement moves.
   const [nextActions, setNextActions] = useState<NextActions | null>(null);
   const [compassDismissed, setCompassDismissed] = useState(false);
+  // Findings: the grounded, evidence-anchored flags for THIS engagement (the
+  // replacement for the generative offer), loaded on the same triggers as the Compass.
+  const [findings, setFindings] = useState<ProjectFinding[]>([]);
+  // A finding discloses in tiers (the "quiet ledger + hook" design): the row opens to
+  // a drawer, the draft teaser opens to the full draft, evidence opens to the trail.
+  const [openFinding, setOpenFinding] = useState<Record<string, boolean>>({});
+  const [openDraft, setOpenDraft] = useState<Record<string, boolean>>({});
+  const [openEvidence, setOpenEvidence] = useState<Record<string, boolean>>({});
+  const [reasonOpenFor, setReasonOpenFor] = useState<string | null>(null);
+  const [findingsPanelCollapsed, setFindingsPanelCollapsed] = useState(false);
+  // The draft preview per finding ("loading" while it's being written, null if none),
+  // and where a saved preview landed in the corpus. previewFetched dedupes fetches.
+  const [findingPreview, setFindingPreview] = useState<Record<string, FindingPreview | "loading" | null>>({});
+  const [savedFinding, setSavedFinding] = useState<Record<string, string>>({});
+  const previewFetched = useRef<Set<string>>(new Set());
   // Engagement strip: the standing constraints (phase · budget · next milestone ·
   // top risk) shown at the top of the chat column. Loaded from /api/engagement.
   const [engagement, setEngagement] = useState<EngSummary | null>(null);
@@ -423,8 +508,18 @@ export default function Home() {
   const [expandedSig, setExpandedSig] = useState<Record<string, boolean>>({});
   const [noteOpenFor, setNoteOpenFor] = useState<string | null>(null);
   const [noteText, setNoteText] = useState("");
-  const [noteKind, setNoteKind] = useState<"context" | "correction" | "nullify">("context");
+  const [noteKind, setNoteKind] = useState<AnnKind>("context");
+  const [composerMode, setComposerMode] = useState<"refine" | "discuss">("refine");
   const [notePosting, setNotePosting] = useState(false);
+  const [clarifyFor, setClarifyFor] = useState<string | null>(null); // "signalId::questionIndex"
+  const [clarifyText, setClarifyText] = useState("");
+  // Interrogate 4a: the main column is a small state machine. "feed" is the ranked
+  // list; "insight" is the dig-deeper brief for one card; "ask" is a typed question's
+  // synthesised answer; "client" is every insight for one account. iqOpenId is the
+  // signal open in dig-deeper. Client/sector filters reuse inboxClient/inboxSector.
+  const [iqView, setIqView] = useState<"feed" | "insight" | "ask" | "client">("feed");
+  const [iqOpenId, setIqOpenId] = useState<string | null>(null);
+  const [iqSavedAsk, setIqSavedAsk] = useState(false); // "Save as insight" pressed on an Ask answer
   // Bottom-right proactive popup: which items the user has dismissed this session
   // (keyed by a stable id), and whether the whole popup is collapsed.
   const [popupDismissed, setPopupDismissed] = useState<Record<string, boolean>>({});
@@ -583,6 +678,199 @@ export default function Home() {
       .catch(() => {});
   }
 
+  // Load the grounded Findings for this engagement (rising risk, unanswered
+  // objectives, …). Detected from the project's own state — not generated — so each
+  // carries verbatim evidence + an auditable confidence read. Dismissals persist
+  // server-side, so what comes back is already filtered to what THIS user hasn't
+  // retired. Fire-and-forget, like the Compass.
+  function loadFindings() {
+    fetch(`/api/findings?project=${project}&user=${user}`)
+      .then((r) => r.json())
+      .then((d) => setFindings(Array.isArray(d?.findings) ? d.findings : []))
+      .catch(() => setFindings([]));
+  }
+
+  // Respond to a finding. Every response persists server-side keyed by the finding's
+  // stable id, so it survives the next recompute (the fix for the old no-op dismiss)
+  // — and feeds the ranker later. "accepted" also sends the finding's action prompt.
+  function respondFinding(
+    f: ProjectFinding,
+    response: "accepted" | "dismissed" | "snoozed",
+    reason?: "not-relevant" | "wrong" | "not-now"
+  ) {
+    setPopupDismissed((s) => ({ ...s, [f.id]: true }));
+    setReasonOpenFor(null);
+    fetch("/api/findings/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: f.id, kind: f.kind, project, user, response, reason }),
+    }).catch(() => {});
+    if (response === "accepted" && f.action) sendText(f.action.prompt);
+  }
+
+  // Open/close a finding's drawer. Opening lazily fetches its draft preview, so the
+  // "already started" teaser is ready without paying for it on findings that stay shut.
+  function toggleFinding(f: ProjectFinding) {
+    const willOpen = !openFinding[f.id];
+    setOpenFinding((m) => ({ ...m, [f.id]: willOpen }));
+    if (willOpen && hasDraft(f)) loadPreview(f);
+  }
+  // Only two kinds carry a draft preview (the deterministic ones); the LLM-detected
+  // kinds lead with their action instead, so don't fetch a preview that isn't there.
+  function hasDraft(f: ProjectFinding) {
+    return f.kind === "rising-risk" || f.kind === "unanswered-objective";
+  }
+
+  // Fetch a finding's draft preview (server-cached). Marked fetched so we ask once.
+  function loadPreview(f: ProjectFinding) {
+    if (previewFetched.current.has(f.id)) return;
+    previewFetched.current.add(f.id);
+    setFindingPreview((m) => ({ ...m, [f.id]: "loading" }));
+    fetch("/api/findings/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project, user, id: f.id }),
+    })
+      .then((r) => r.json())
+      .then((d) => setFindingPreview((m) => ({ ...m, [f.id]: d?.preview ?? null })))
+      .catch(() => setFindingPreview((m) => ({ ...m, [f.id]: null })));
+  }
+  // Save a finding's draft into the project corpus (and index it). Records 'saved',
+  // which the ranker reads as a positive signal.
+  function saveFinding(f: ProjectFinding, p: FindingPreview) {
+    fetch("/api/findings/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project, user, id: f.id, kind: f.kind, heading: p.heading, body: p.body }),
+    })
+      .then((r) => r.json())
+      .then((d) => { if (d?.path) setSavedFinding((m) => ({ ...m, [f.id]: d.path })); })
+      .catch(() => {});
+  }
+
+  // One finding as a quiet-ledger row: collapsed to a single line, opening in tiers
+  // (why-now → folded-in draft teaser → evidence). Shared by the corner nudge and the
+  // in-project Findings panel, so both surfaces stay identical.
+  function renderFindingRow(f: ProjectFinding) {
+    const cm = confMeta(f.confidence);
+    const km =
+      f.kind === "rising-risk"
+        ? { label: "Risk escalating", cls: "risk" }
+        : f.kind === "unanswered-objective"
+        ? { label: "Objective gap", cls: "deliv" }
+        : f.kind === "ungrounded-claim"
+        ? { label: "Unsupported claim", cls: "risk" }
+        : f.kind === "contradiction"
+        ? { label: "Contradiction", cls: "risk" }
+        : { label: "Flag", cls: "deliv" };
+    const open = !!openFinding[f.id];
+    const draftOpen = !!openDraft[f.id];
+    const evOpen = !!openEvidence[f.id];
+    const reasonOpen = reasonOpenFor === f.id;
+    const pv = findingPreview[f.id];
+    const saved = savedFinding[f.id];
+    const showDraft = hasDraft(f) && !!f.action;
+    const teaserLabel = f.kind === "unanswered-objective" ? "What would close it" : "Starter mitigation ready";
+    const hasChecks = f.evidence.length > 0 || f.assessment.factors.length > 0;
+    return (
+      <div key={f.id} className={`finding-row kind-${km.cls} ${open ? "open" : ""}`}>
+        {/* Collapsed: one calm line — kind stripe · gist · confidence · chevron. */}
+        <button className="frow-head" aria-expanded={open} onClick={() => toggleFinding(f)}>
+          <span className={`frow-stripe kind-${km.cls}`} />
+          <span className="frow-title">{f.title}</span>
+          <span className="frow-meter conf-meter" title={`${km.label} · ${cm.label}`}>{cm.meter}</span>
+          <span className="frow-chev">▾</span>
+        </button>
+        {open && (
+          <div className="frow-drawer">
+            <div className="frow-why">{f.trigger}</div>
+
+            {/* The hook, folded in: a draft teaser that opens to the full draft. */}
+            {showDraft && (
+              <>
+                <button className="frow-teaser" aria-expanded={draftOpen} onClick={() => setOpenDraft((m) => ({ ...m, [f.id]: !draftOpen }))}>
+                  <span className="frow-spark">✦</span>
+                  <span className="frow-teaser-txt">
+                    <span className="frow-teaser-k">{teaserLabel}</span>
+                    {pv && pv !== "loading" && !draftOpen && <span className="frow-teaser-peek">{pv.body.replace(/\n+/g, " ")}</span>}
+                    {(pv === "loading" || pv === undefined) && !draftOpen && <span className="frow-teaser-peek dim">drafting…</span>}
+                  </span>
+                  <span className="frow-go">{draftOpen ? "▾" : "→"}</span>
+                </button>
+                {draftOpen && (pv === "loading" || pv === undefined) && <div className="frow-draft dim">drafting a starter…</div>}
+                {draftOpen && pv === null && <div className="frow-draft dim">No draft for this finding.</div>}
+                {draftOpen && pv && pv !== "loading" && (
+                  <div className="frow-draft">
+                    <div className="draft-body">{pv.body}</div>
+                    {saved ? (
+                      <div className="nudge-saved">✓ Saved to {saved}</div>
+                    ) : (
+                      <button className="frow-save" onClick={() => saveFinding(f, pv)}>Save to project</button>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Evidence, on demand. */}
+            {hasChecks && (
+              <>
+                <button className="frow-link" aria-expanded={evOpen} onClick={() => setOpenEvidence((m) => ({ ...m, [f.id]: !evOpen }))}>
+                  Evidence{f.evidence.length ? ` · ${f.evidence.length} quote${f.evidence.length === 1 ? "" : "s"}` : ""}{f.assessment.factors.length ? ` · ${f.assessment.factors.length} checks` : ""} <span className="frow-chev sm">▾</span>
+                </button>
+                {evOpen && (
+                  <div className="nudge-ev">
+                    {f.evidence.length === 0 && <div className="ev-empty">Inferred — no verbatim excerpt (the gap itself is the signal).</div>}
+                    {f.evidence.map((q, i) => (
+                      <div className="ev-line" key={i}>
+                        <span className="ev-kind">{q.source}</span>
+                        <span className="ev-quote">“{q.quote}”</span>
+                      </div>
+                    ))}
+                    {f.assessment.factors.length > 0 && (
+                      <div className="factors">
+                        {f.assessment.factors.map((fac, i) => (
+                          <div className={`factor fac-${fac.status}`} key={i}>
+                            <span className="fac-dot">{fac.status === "strong" ? "✓" : fac.status === "moderate" ? "~" : "!"}</span>
+                            <span className="fac-label">{fac.label}</span>
+                            <span className="fac-detail">{fac.detail}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {f.assessment.caveats.length > 0 && (
+                      <div className="counter">
+                        <div className="counter-h">✓ Stress-tested against</div>
+                        <ul>{f.assessment.caveats.map((c, i) => <li key={i}>{c}</li>)}</ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="frow-actions">
+              {f.action && (
+                <button className="promote" disabled={loading || !activeChat} onClick={() => respondFinding(f, "accepted")}>
+                  {f.action.title}
+                </button>
+              )}
+              <span className="frow-spacer" />
+              <button className="ghost" onClick={() => setReasonOpenFor(reasonOpen ? null : f.id)}>Dismiss ▾</button>
+            </div>
+            {reasonOpen && (
+              <div className="dismiss-reasons">
+                <button onClick={() => respondFinding(f, "dismissed", "not-relevant")}>Not relevant</button>
+                <button onClick={() => respondFinding(f, "dismissed", "wrong")}>This is wrong</button>
+                <button onClick={() => respondFinding(f, "snoozed", "not-now")}>Not now</button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   // Refresh the Compass whenever the engagement state has actually moved: a chat
   // is opened with content, or a turn just finished (messages.length grows). Gated
   // on !loading so it never fires mid-turn. Grounding it in messages.length is what
@@ -591,6 +879,14 @@ export default function Home() {
     if (activeChat && messages.length > 0 && !loading) loadNextActions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChat, project, user, messages.length, loading]);
+
+  // Findings track the engagement's underlying state (files + risk register), not
+  // the chat, so refresh on project open, after a turn, and after an upload.
+  useEffect(() => {
+    if (view === "project" && !loading) loadFindings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, user, view, messages.length, loading]);
+
 
   // ---- Bottom-right nudge: the items the agent wants the user to see ----
   // Built once here so the auto-collapse effect and the popup render agree. The
@@ -603,12 +899,18 @@ export default function Home() {
     !!offer &&
     ((nextActions?.actions ?? []).some((a) => a.prompt === offer.prompt || a.title === offer.title) ||
       (offer.title.length > 3 && lastReply.toLowerCase().includes(offer.title.toLowerCase())));
-  const showOffer = !!offer && !popupDismissed[offerId] && !offerEchoes;
+  // Findings come first — they're the grounded flags. The generative offer is now
+  // only a FALLBACK: if any finding is showing, we suppress the offer entirely
+  // (a detected, evidence-backed flag always beats an invented suggestion).
+  const liveFindings = findings.filter((f) => !popupDismissed[f.id]);
+  const showOffer = !!offer && !popupDismissed[offerId] && !offerEchoes && liveFindings.length === 0;
   const nudgeItems: Array<
+    | { t: "finding"; id: string; f: ProjectFinding }
     | { t: "offer"; id: string; offer: NextAction }
     | { t: "prop"; id: string; p: Proposal }
     | { t: "nom"; id: string; n: Nomination }
   > = [
+    ...liveFindings.map((f) => ({ t: "finding" as const, id: f.id, f })),
     ...(showOffer && offer ? [{ t: "offer" as const, id: offerId, offer }] : []),
     ...proposals.filter((p) => !popupDismissed[p.id]).map((p) => ({ t: "prop" as const, id: p.id, p })),
     ...nominations.filter((n) => !popupDismissed[n.id]).map((n) => ({ t: "nom" as const, id: n.id, n })),
@@ -746,7 +1048,40 @@ export default function Home() {
   // nullification. Persisted server-side and visible to the whole team; a nullify
   // retires the insight for everyone (kept with author + reason). Optimistically
   // merges the returned rollup so the thread updates without a full reload.
-  async function annotateSignal(signalId: string, kind: "context" | "correction" | "nullify", text: string) {
+  // Move an insight through its lifecycle (own / resolve / snooze / reopen). Shared.
+  async function setSignalLifecycle(s: InboxSignal, state: "owned" | "resolved" | "snoozed" | "reopened") {
+    await fetch("/api/signals/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user, signalId: s.id, state, snoozeDays: state === "snoozed" ? 14 : undefined }),
+    }).catch(() => {});
+    // Resolve/snooze remove it from the active feed; own updates the badge in place.
+    if (state === "resolved" || state === "snoozed") {
+      setInboxSignals((xs) => (xs ?? []).filter((x) => x.id !== s.id));
+    } else {
+      setInboxSignals((xs) => (xs ?? []).map((x) => (x.id === s.id ? { ...x, state: { state, actor: user, ts: new Date().toISOString() } } : x)));
+    }
+  }
+
+  // Answer a clarifying question → recorded as a refinement (context) on the insight.
+  async function answerClarify(signalId: string, question: string, answer: string) {
+    const body = `Q: ${question}\nA: ${answer.trim()}`;
+    if (!answer.trim() || notePosting) return;
+    setNotePosting(true);
+    try {
+      const d = await fetch("/api/signals/annotate", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user, signalId, kind: "context", body }),
+      }).then((r) => r.json());
+      if (d?.rollup) setAnnById((m) => ({ ...m, [signalId]: d.rollup }));
+      setClarifyFor(null);
+      setClarifyText("");
+    } finally {
+      setNotePosting(false);
+    }
+  }
+
+  async function annotateSignal(signalId: string, kind: AnnKind, text: string) {
     const body = text.trim();
     if (!body || notePosting) return;
     setNotePosting(true);
@@ -769,7 +1104,9 @@ export default function Home() {
   function signalBucket(s: InboxSignal): "risk" | "opp" | "fyi" {
     if (s.soft) return "fyi";
     if (["churn", "early-warning", "delivery-health"].includes(s.family)) return "risk";
-    if (["buying", "competitive", "new-service-line"].includes(s.family)) return "opp";
+    if (s.family === "triangulated") return s.triangulated?.kind === "risk" ? "risk" : "opp";
+    if (s.family === "convergence") return s.convergence?.kind === "risk" ? "risk" : "opp";
+    if (["buying", "competitive", "new-service-line", "follow-on", "proposition"].includes(s.family)) return "opp";
     return "fyi";
   }
   // One surfaced INSIGHT — evidence-first. Leads with the finding + an auditable
@@ -778,152 +1115,553 @@ export default function Home() {
   // verbatim quotes + provenance. Below sits the SHARED annotation layer: the
   // team's notes and a composer to sharpen or nullify. Ends at the insight — no
   // downstream actions in this version.
-  function renderInsightCard(s: InboxSignal) {
-    const cm = confMeta(s.confidence);
-    const mine = s.route === myRoute;
-    const kind = groupMeta(s.family).kind;
+  // The Offer block — demand × price × staffing joined into one decision. Rendered
+  // on new-service-line cards. Every number is honest: a price RANGE from named
+  // comparables (or "unknown" when none), a staffing read that shows the gap, and a
+  // confidence that is the weakest of the three legs — never a flattering average.
+  function renderOfferBlock(o: Offer) {
+    const gbp = (n: number) => `£${Math.round(n / 1000)}k`;
+    const p = (n: number) => `${Math.round(n * 100)}%`;
+    const staffLabel = o.staffing.band === "deliverable" ? "Deliverable now" : o.staffing.band === "tight" ? "Tight" : "Capability gap";
+    return (
+      <div className="offer">
+        <div className="offer-h">
+          <span className="offer-badge">◆ Offer</span>
+          <span className="offer-sub">demand × price × staffing — joined</span>
+        </div>
+        <div className="offer-grid">
+          <div className="offer-leg">
+            <span className="offer-k">Demand</span>
+            <span className="offer-v"><b>{o.demand.count}</b> clients · {o.demand.sectors.join(" · ")}</span>
+          </div>
+          <div className="offer-leg">
+            <span className="offer-k">Price</span>
+            <span className="offer-v">
+              {o.price ? (
+                <>
+                  <b className="offer-mono">{gbp(o.price.low)}–{gbp(o.price.high)}</b> · ~{p(o.price.margin)} margin{" "}
+                  <span className="offer-vs">vs {p(o.price.bookMargin)} book</span>
+                </>
+              ) : (
+                <span className="offer-none">no comparable to price against yet</span>
+              )}
+            </span>
+          </div>
+          <div className="offer-leg">
+            <span className="offer-k">Staffing</span>
+            <span className={`offer-v staff-${o.staffing.band}`}>
+              <b>{staffLabel}</b>
+              {o.staffing.available.length ? (
+                <> — {o.staffing.available.map((a) => `${a.name} (${a.rollsOffInDays <= 0 ? "on bench" : `free in ${a.rollsOffInDays}d`})`).join(", ")}</>
+              ) : o.staffing.gapNote ? (
+                <> — {o.staffing.gapNote}</>
+              ) : null}
+            </span>
+          </div>
+          <div className="offer-leg">
+            <span className="offer-k">Fit</span>
+            <span className="offer-v">
+              {o.fit.kind === "extension" ? <>extends <b>{o.fit.nearest}</b></> : <>new capability (closest: {o.fit.nearest})</>}
+            </span>
+          </div>
+        </div>
+        {o.price && (
+          <div className="offer-comps">
+            Priced from {o.price.comparables} comparable engagement{o.price.comparables === 1 ? "" : "s"}, median {gbp(o.price.median)}.
+          </div>
+        )}
+        <div className="offer-legs">
+          Confidence is the weakest leg — demand {p(o.legs.demand)} · price {p(o.legs.price)} · staffing {p(o.legs.staffing)}.
+        </div>
+        {o.stressTest.length > 0 && (
+          <div className="offer-stress">
+            <span className="offer-stress-h">⚠ before you pitch</span>
+            <ul>{o.stressTest.map((t, i) => <li key={i}>{t}</li>)}</ul>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Follow-on block — the named opening: who to reach out to and the adjacent move.
+  // The relationship + the buying signal in one place; a warm, specific next step.
+  function renderFollowOnBlock(f: FollowOn) {
+    return (
+      <div className="offer sv-block">
+        <div className="offer-h">
+          <span className="offer-badge">🤝 Follow-on</span>
+          <span className="offer-sub">live signal × relationship × catalogue</span>
+        </div>
+        <div className="offer-grid">
+          <div className="offer-leg">
+            <span className="offer-k">Reach out</span>
+            <span className="offer-v">
+              {f.contact ? <><b>{f.contact.name}</b> · {f.contact.role} at {f.client}</> : <span className="offer-none">no named sponsor on record — identify the buyer first</span>}
+            </span>
+          </div>
+          <div className="offer-leg">
+            <span className="offer-k">They said</span>
+            <span className="offer-v">“{f.headline}”</span>
+          </div>
+          <div className="offer-leg">
+            <span className="offer-k">Move</span>
+            <span className="offer-v"><b>{f.move}</b>{f.offering ? <span className="offer-vs"> — in the catalogue</span> : null}</span>
+          </div>
+          {f.link && (
+            <div className="offer-leg">
+              <span className="offer-k">Lead with</span>
+              <span className="offer-v sv-link">
+                🧭 <b>{f.link.proposition}</b>
+                {f.link.priceLow != null && f.link.priceHigh != null ? (
+                  <span className="offer-vs"> · ~£{Math.round(f.link.priceLow / 1000)}k–£{Math.round(f.link.priceHigh / 1000)}k offer</span>
+                ) : null}
+              </span>
+            </div>
+          )}
+        </div>
+        {f.stressTest.length > 0 && (
+          <div className="offer-stress">
+            <span className="offer-stress-h">⚠ before you reach out</span>
+            <ul>{f.stressTest.map((t, i) => <li key={i}>{t}</li>)}</ul>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Proposition block — one altitude up: not a deal but an offering to develop.
+  // Two sources: DEMAND (clients keep asking) or DELIVERY (a pattern in what we keep
+  // finding across engagements). Web context enriches the top one.
+  function renderPropositionBlock(p: Proposition) {
+    const delivery = p.source === "delivery";
+    return (
+      <div className="offer sv-block sv-prop">
+        <div className="offer-h">
+          <span className="offer-badge">🧭 Proposition</span>
+          <span className="offer-sub">{delivery ? "recurring in our delivery — an offering to package" : "appetite across the book — an offering to build"}</span>
+        </div>
+        <div className="offer-grid">
+          <div className="offer-leg">
+            <span className="offer-k">{delivery ? "Seen in" : "Appetite"}</span>
+            <span className="offer-v"><b>{p.clients}</b> {delivery ? "engagements" : "clients"} · {p.sectors.join(" · ")}</span>
+          </div>
+          <div className="offer-leg">
+            <span className="offer-k">Develop</span>
+            <span className="offer-v">{p.soWhat ? <b>{p.soWhat}</b> : "Package a repeatable offering around this recurring demand."}</span>
+          </div>
+        </div>
+        {p.webContext && (
+          <div className="offer-web"><span className="offer-web-h">🌐 external</span> {p.webContext}</div>
+        )}
+        {p.stressTest.length > 0 && (
+          <div className="offer-stress">
+            <span className="offer-stress-h">⚠ before you build</span>
+            <ul>{p.stressTest.map((t, i) => <li key={i}>{t}</li>)}</ul>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Triangulated block — the latent layer. The insight is in the TITLE; here we show
+  // HOW it was reached: the exact scattered signals it connected (the audit trail
+  // that keeps it honest), the "so what", any external context, and — always — the
+  // reminder that it's an inferred hypothesis, not a stated finding.
+  function renderTriangulatedBlock(t: TriangulatedInsight) {
+    return (
+      <div className="offer sv-block tri-block">
+        <div className="offer-h">
+          <span className="offer-badge">🔗 Triangulated</span>
+          <span className="offer-sub">connects {t.connected.length} signals across {t.projects.length} engagement{t.projects.length === 1 ? "" : "s"} — a hypothesis, not a fact</span>
+        </div>
+        <div className="offer-grid">
+          <div className="offer-leg">
+            <span className="offer-k">Why</span>
+            <span className="offer-v">{t.why}</span>
+          </div>
+          <div className="offer-leg">
+            <span className="offer-k">So what</span>
+            <span className="offer-v"><b>{t.soWhat}</b></span>
+          </div>
+        </div>
+        <div className="tri-trail">
+          <div className="tri-trail-h">Triangulated from — none of these says it alone</div>
+          {t.connected.map((c, i) => (
+            <div className="tri-sig" key={i}>
+              <span className="tri-sig-kind">{c.type}{t.deIdentified ? ` · ${c.sector}` : ` · ${c.project}`}</span>
+              <span className="tri-sig-text">{c.text}</span>
+            </div>
+          ))}
+        </div>
+        {t.webContext && (
+          <div className="offer-web"><span className="offer-web-h">🌐 external</span> {t.webContext}</div>
+        )}
+        <div className="offer-stress">
+          <span className="offer-stress-h">⚠ hypothesis — validate before acting</span>
+          <ul><li>Inferred by connecting signals, not stated by any of them — treat it as a lead to test, not a finding.</li></ul>
+        </div>
+      </div>
+    );
+  }
+
+  // Convergence block — deterministic multi-modal agreement. Like triangulation but
+  // it's a FACT-convergence (several independent sources line up), not an inferred
+  // hypothesis, so it leads with the agreement and shows every source in the trail.
+  function renderConvergenceBlock(c: ConvergenceInsight) {
+    return (
+      <div className="offer sv-block tri-block">
+        <div className="offer-h">
+          <span className="offer-badge">🎯 Convergence</span>
+          <span className="offer-sub">{c.modalities.length} independent modalities agree · {c.projects.length} engagement{c.projects.length === 1 ? "" : "s"}</span>
+        </div>
+        <div className="offer-grid">
+          <div className="offer-leg">
+            <span className="offer-k">So what</span>
+            <span className="offer-v"><b>{c.soWhat}</b></span>
+          </div>
+        </div>
+        <div className="tri-trail">
+          <div className="tri-trail-h">Converges from {c.signals.length} signals — no single one carries it</div>
+          {c.signals.map((sig, i) => (
+            <div className="tri-sig" key={i}>
+              <span className="tri-sig-kind">{sig.modality}</span>
+              <span className="tri-sig-text">{sig.text}{sig.provenance ? <span className="tri-prov"> · {sig.provenance}</span> : null}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ---- Interrogate 4a helpers ------------------------------------------------
+  // Compact recency for the trust bar: today / 3d / 2w / 4mo.
+  function shortAge(days?: number): string {
+    if (days == null) return "";
+    if (days <= 0) return "today";
+    if (days < 7) return `${days}d`;
+    if (days < 28) return `${Math.round(days / 7)}w`;
+    return `${Math.round(days / 30)}mo`;
+  }
+  // Confidence ring — a dial filled to the confidence %, coloured by band. The
+  // gradient stop is data-driven so it must be inline; everything else is in CSS.
+  function confRing(c: number, size = 18) {
+    const pct = Math.max(0, Math.min(100, Math.round(c * 100)));
+    const col = c >= CONF_HIGH ? "var(--good)" : c >= CONF_MED ? "var(--warn-dot)" : "var(--ink-3)";
+    return (
+      <span className="iq2-ring" style={{ width: size, height: size, background: `conic-gradient(${col} ${pct}%, var(--border) 0)` }}>
+        <span className="iq2-ring-hole" />
+      </span>
+    );
+  }
+  // The two priority lanes 4a uses instead of type buckets: risk-shaped or
+  // high-confidence items lead as cards ("needs attention"); the rest are a
+  // compact "worth knowing" list. Type still drives ranking — it's just not a chip.
+  function iqPriority(s: InboxSignal): "attention" | "know" {
+    return signalBucket(s) === "risk" || s.confidence >= CONF_HIGH ? "attention" : "know";
+  }
+  // Client labels for a signal's chips (its own account + any it corroborates across).
+  function clientChipsOf(s: InboxSignal): string[] {
+    const set = new Set<string>();
+    if (s.client) set.add(s.client);
+    (s.support?.clients ?? []).forEach((c) => c && set.add(c));
+    return Array.from(set);
+  }
+  // How many independent sources agree — the "◆ N agree" corroboration count.
+  function agreeCount(s: InboxSignal): number {
+    if (s.convergence) return s.convergence.signals.length;
+    if (s.triangulated) return s.triangulated.connected.length;
+    return s.support?.count ?? 0;
+  }
+  // The single "recommended move" line, pulled from whichever value-plane block the
+  // signal carries — never invented.
+  function moveText(s: InboxSignal): string | null {
+    if (s.offer) return `Package and pitch this offer — ${s.offer.fit.kind === "extension" ? `extends ${s.offer.fit.nearest}` : `new capability near ${s.offer.fit.nearest}`}.`;
+    if (s.followOn) return `${s.followOn.contact ? `Reach out to ${s.followOn.contact.name} (${s.followOn.contact.role})` : "Identify the buyer"} — ${s.followOn.move}.`;
+    if (s.proposition) return s.proposition.soWhat ?? "Package a repeatable offering around this recurring demand.";
+    if (s.triangulated) return s.triangulated.soWhat;
+    if (s.convergence) return s.convergence.soWhat;
+    return null;
+  }
+
+  // The minimal FEED card — leads with the finding + a plain "so what", then the
+  // trust bar (confidence ring · corroboration · client chips · recency). No type
+  // chip, ≤2 tags: the whole card opens the dig-deeper brief.
+  function renderIqCard(s: InboxSignal) {
+    const owned = s.state?.state === "owned";
+    const clients = clientChipsOf(s);
+    const agree = agreeCount(s);
+    return (
+      <div key={s.id} className={`iq2-card ${owned ? "owned" : ""} ${s.aged ? "aged" : ""}`} onClick={() => openInsight(s)}>
+        <div className="iq2-card-title">{s.title}</div>
+        <div className="iq2-card-so">{s.detail}</div>
+        <div className="iq2-trust">
+          <span className="iq2-conf">{confRing(s.confidence)}{Math.round(s.confidence * 100)}%</span>
+          {agree > 0 && <span className="iq2-agree">◆ {agree} agree</span>}
+          {clients.length > 0 && (
+            <span className="iq2-cchips">
+              {clients.slice(0, 2).map((c) => <span className="iq2-cchip" key={c}>{c}</span>)}
+              {clients.length > 2 && <span className="iq2-cchip">+{clients.length - 2}</span>}
+            </span>
+          )}
+          {owned && <span className="iq2-owned-tag" title={`Owned by ${USER_NAMES[s.state!.actor] ?? s.state!.actor}`}>👤 owned</span>}
+          {s.aged && <span className="iq2-aged-tag" title="Stale + low-signal — folded down, still here if it matters">💤 aged</span>}
+          {s.ageDays != null && <span className="iq2-recency">{shortAge(s.ageDays)}</span>}
+        </div>
+        <div className="iq2-cardfoot">
+          <span className="iq2-viewlink">View full analysis →</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Compact "worth knowing" / client-view row.
+  function renderIqRow(s: InboxSignal) {
+    const agree = agreeCount(s);
+    return (
+      <div key={s.id} className="iq2-row" onClick={() => openInsight(s)}>
+        <span className="iq2-row-dot" />
+        <span className="iq2-row-title">{s.title}</span>
+        <span className="iq2-row-meta">{agree > 0 ? `◆${agree} · ` : ""}{shortAge(s.ageDays)}</span>
+        <span className="iq2-row-caret">›</span>
+      </div>
+    );
+  }
+
+  // The shared human layer, folded into 4a's cleaner idiom: clarifying questions,
+  // refinements (shape the insight) vs comments (team discussion), the lifecycle
+  // footer (own / resolve / snooze), and the refine-vs-discuss composer. Reused
+  // verbatim inside the dig-deeper view so nothing built last session is lost.
+  function renderHumanLoop(s: InboxSignal) {
     const roll = annById[s.id];
     const notes = roll?.notes ?? [];
+    const refinements = roll?.refinements ?? notes.filter((n) => n.kind !== "comment");
+    const comments = roll?.comments ?? notes.filter((n) => n.kind === "comment");
     const nullified = roll?.nullified ?? false;
-    const open = !!expandedSig[s.id];
+    const owned = s.state?.state === "owned";
     const composerOpen = noteOpenFor === s.id;
-    const rationale = confRationale(s);
     return (
-      <div key={s.id} className={`insight kind-${kind} ${nullified ? "retired" : ""}`}>
+      <div className="iq2-humanloop">
         {nullified && (
           <div className="insight-retired-banner">
             ⦸ Retired by {USER_NAMES[roll!.nullifiedBy ?? ""] ?? roll!.nullifiedBy}
             {roll!.nullifyReason ? <> — “{roll!.nullifyReason}”</> : null}
           </div>
         )}
-        <div className="insight-head">
-          <span className={`kind-pill kind-${kind}`}>{groupMeta(s.family).label}</span>
-          {mine && <span className="for-you">for your desk</span>}
-          {s.source && (
-            <span className="conn-tag" title="Demo: sourced from a connected workspace tool over MCP (ClickUp / Google Drive / pricing sheet), joined to the project corpus — see VISION.md">
-              🔗 {s.source === "clickup" ? "via ClickUp" : s.source === "drive" ? "via Google Drive" : "via pricing sheet"} · demo
-            </span>
-          )}
-          {s.deIdentified && (
-            <span className="anon-tag" title="Aggregated across several clients with their names removed — you see the cross-client pattern, never any single client's data.">
-              🛡 de-identified
-            </span>
-          )}
-        </div>
-        <div className="insight-title">{s.title}</div>
-        <div className="insight-detail">{s.detail}</div>
-
-        <div className="conf-row">
-          <span className={`conf-badge conf-${cm.level}`}><span className="conf-meter">{cm.meter}</span> {cm.label}</span>
-          <span className="conf-why">{rationale}</span>
-        </div>
-
-        <button className={`ev-toggle ${open ? "open" : ""}`} onClick={() => setExpandedSig((m) => ({ ...m, [s.id]: !open }))}>
-          {open ? "Hide evidence ▴" : `Evidence ▾${s.evidence.length ? ` · ${s.evidence.length}` : ""}`}
-        </button>
-        {open && (
-          <div className="ev-trail">
-            {/* Plain-language gloss: how a score is built, or how connected sources join. */}
-            {s.note && <div className="ev-note">{s.note}</div>}
-            {/* What "de-identified" actually means, taught in context. */}
-            {s.deIdentified && (
-              <div className="ev-note ev-note-deid">
-                🛡 <b>De-identified</b> — combined across several clients with names removed, so you get the cross-client pattern without exposing any single client's data.
-              </div>
-            )}
-            {/* Why this rating — the real drivers, graded (auditable confidence). */}
-            {s.assessment && s.assessment.factors.length > 0 && (
-              <div className="ev-why">
-                <div className="ev-sub-h">Why rated {cm.label.replace(" confidence", "")}</div>
-                <div className="factors">
-                  {s.assessment.factors.map((f, i) => (
-                    <div className={`factor fac-${f.status}`} key={i}>
-                      <span className="fac-dot">{f.status === "strong" ? "✓" : f.status === "moderate" ? "~" : "!"}</span>
-                      <span className="fac-label">{f.label}</span>
-                      <span className="fac-detail">{f.detail}</span>
+        {/* Clarifying questions — the system asks YOU what would firm this up. */}
+        {s.clarify && s.clarify.length > 0 && !nullified && (
+          <div className="clarify">
+            <div className="clarify-h">❓ {s.clarify.length} question{s.clarify.length === 1 ? "" : "s"} would sharpen this</div>
+            {s.clarify.map((q, i) => {
+              const key = `${s.id}::${i}`;
+              const openQ = clarifyFor === key;
+              return (
+                <div className="clarify-q" key={i}>
+                  <div className="clarify-q-text">{q.q}</div>
+                  <div className="clarify-q-why">{q.why}</div>
+                  {openQ ? (
+                    <div className="clarify-answer">
+                      <textarea value={clarifyText} onChange={(e) => setClarifyText(e.target.value)} placeholder="Your answer — recorded as a refinement the team sees…" rows={2} />
+                      <div className="note-composer-actions">
+                        <button className="ghost" onClick={() => { setClarifyFor(null); setClarifyText(""); }}>Cancel</button>
+                        <button className="note-post" disabled={notePosting || !clarifyText.trim()} onClick={() => answerClarify(s.id, q.q, clarifyText)}>{notePosting ? "Saving…" : "Answer"}</button>
+                      </div>
                     </div>
-                  ))}
+                  ) : (
+                    <button className="clarify-answer-btn" onClick={() => { setClarifyFor(key); setClarifyText(""); }}>Answer this</button>
+                  )}
                 </div>
-              </div>
-            )}
-            {/* Verbatim provenance. */}
-            <div className="ev-sub-h">Evidence</div>
-            {s.evidence.length === 0 && <div className="ev-empty">No verbatim excerpts attached to this signal.</div>}
-            {s.evidence.map((q, i) => (
-              <div className="ev-line" key={i}>
-                <span className="ev-kind">{s.source ? "Source" : s.deIdentified ? "Pattern" : "Internal"}</span>
-                <span className="ev-quote">“{q}”</span>
-              </div>
-            ))}
-            {s.support && (s.support.count || s.support.sectors?.length) && (
-              <div className="ev-support">
-                Corroboration: {s.support.count ? <b>{s.support.count} engagement{s.support.count === 1 ? "" : "s"}</b> : "—"}
-                {s.support.sectors?.length ? <> · {s.support.sectors.join(" · ")}</> : null}
-                {s.support.clients?.length ? <> · {s.support.clients.join(" · ")}</> : null}
-              </div>
-            )}
-            {/* Counter-check — what would challenge or strengthen it. */}
-            {s.assessment && (
-              s.assessment.caveats.length > 0 ? (
-                <div className="counter">
-                  <div className="counter-h">✓ Stress-tested against</div>
-                  <ul>{s.assessment.caveats.map((c, i) => <li key={i}>{c}</li>)}</ul>
-                </div>
-              ) : (
-                <div className="counter counter-ok">
-                  <div className="counter-h">✓ Stress-tested</div>
-                  <p>Nothing in the surfaced evidence undercuts this.</p>
-                </div>
-              )
-            )}
+              );
+            })}
           </div>
         )}
 
-        {/* Shared human layer — visible to everyone */}
-        {notes.length > 0 && (
+        {refinements.length > 0 && (
           <div className="notes">
-            {notes.map((n) => (
+            {refinements.map((n) => (
               <div className={`note-item note-${n.kind}`} key={n.id}>
                 <span className="note-who">{USER_NAMES[n.author] ?? n.author}</span>
-                <span className={`note-kind nk-${n.kind}`}>{n.kind}</span>
+                <span className={`note-kind nk-${n.kind}`}>{n.kind === "context" ? "context" : n.kind}</span>
                 <span className="note-body">{n.body}</span>
               </div>
             ))}
           </div>
         )}
+        {comments.length > 0 && (
+          <div className="comments">
+            {comments.map((n) => (
+              <div className="comment-item" key={n.id}>
+                <span className="comment-who">{USER_NAMES[n.author] ?? n.author}</span>
+                <span className="comment-body">{n.body}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="insight-foot">
-          <button className="note-add" onClick={() => { setNoteOpenFor(composerOpen ? null : s.id); setNoteText(""); setNoteKind("context"); }}>
-            💬 {notes.length ? `${notes.length} note${notes.length === 1 ? "" : "s"} · add` : "Add a note"}
-          </button>
-          {!nullified && <button className="dismiss-mini" onClick={() => dismissSignal(s)} title="clear from your own inbox (doesn't affect the team)">Dismiss for me</button>}
+          <button className="foot-btn" onClick={() => { setNoteOpenFor(composerOpen ? null : s.id); setNoteText(""); setNoteKind("context"); setComposerMode("refine"); }}>Refine ▸</button>
+          <button className="foot-btn" onClick={() => { setNoteOpenFor(composerOpen ? null : s.id); setNoteText(""); setNoteKind("comment"); setComposerMode("discuss"); }}>💬 Discuss{comments.length ? ` · ${comments.length}` : ""}</button>
+          <span className="foot-sep" />
+          {!nullified && !owned && <button className="foot-btn" onClick={() => setSignalLifecycle(s, "owned")} title="Take ownership — badges it for the team">Own it</button>}
+          {!nullified && <button className="foot-btn" onClick={() => setSignalLifecycle(s, "resolved")} title="Dealt with — moves to History (never deleted)">✓ Resolve</button>}
+          {!nullified && <button className="foot-btn" onClick={() => setSignalLifecycle(s, "snoozed")} title="Hide for 2 weeks, then it returns">Snooze</button>}
         </div>
+
         {composerOpen && (
           <div className="note-composer">
-            <div className="note-kinds">
-              {(["context", "correction", "nullify"] as const).map((k) => (
-                <button key={k} className={`note-kind-pick nk-${k} ${noteKind === k ? "active" : ""}`} onClick={() => setNoteKind(k)}>
-                  {k === "context" ? "Add context" : k === "correction" ? "Correct" : "Nullify"}
-                </button>
-              ))}
-            </div>
+            {composerMode === "refine" ? (
+              <>
+                <div className="composer-lead">Refine the insight — the team sees this and it shapes how the insight is treated.</div>
+                <div className="note-kinds">
+                  {(["context", "correction", "nullify"] as const).map((k) => (
+                    <button key={k} className={`note-kind-pick nk-${k} ${noteKind === k ? "active" : ""}`} onClick={() => setNoteKind(k)}>
+                      {k === "context" ? "Add context" : k === "correction" ? "Correct" : "Nullify"}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="composer-lead">💬 Discuss with the team — a comment; it won't change the insight.</div>
+            )}
             <textarea
               value={noteText}
               onChange={(e) => setNoteText(e.target.value)}
-              placeholder={noteKind === "nullify" ? "Why should this be retired for the team?" : noteKind === "correction" ? "What's off, and what's the correction?" : "Add context that sharpens this insight…"}
+              placeholder={composerMode === "discuss" ? "Comment for the team…" : noteKind === "nullify" ? "Why should this be retired for the team?" : noteKind === "correction" ? "What's off, and what's the correction?" : "Add context that sharpens this insight…"}
               rows={2}
             />
             <div className="note-composer-foot">
               <span className="note-shared-hint">🌐 visible to the whole team</span>
               <div className="note-composer-actions">
                 <button className="ghost" onClick={() => setNoteOpenFor(null)}>Cancel</button>
-                <button className="note-post" disabled={notePosting || !noteText.trim()} onClick={() => annotateSignal(s.id, noteKind, noteText)}>
-                  {notePosting ? "Posting…" : "Post note"}
+                <button className="note-post" disabled={notePosting || !noteText.trim()} onClick={() => annotateSignal(s.id, composerMode === "discuss" ? "comment" : noteKind, noteText)}>
+                  {notePosting ? "Posting…" : composerMode === "discuss" ? "Post comment" : "Post refinement"}
                 </button>
               </div>
             </div>
           </div>
         )}
       </div>
+    );
+  }
+
+  // Open a card's dig-deeper brief.
+  function openInsight(s: InboxSignal) { setIqOpenId(s.id); setIqView("insight"); }
+  // Ask a typed / suggested question — switch to the Ask view and run the synthesis.
+  function askIq(q?: string) {
+    if (q != null) setInboxQuery(q);
+    setIqSavedAsk(false);
+    setIqView("ask");
+    runInboxQuery(q);
+  }
+
+  // The DIG-DEEPER brief — the full analysis behind a card. Stats trio, per-client
+  // breakdown, how it was triangulated, the value-plane block (offer / follow-on /
+  // proposition / triangulation / convergence), verbatim evidence, the recommended
+  // move, mentioned-client pills, and the folded human loop.
+  function renderDigDeeper(s: InboxSignal) {
+    const cm = confMeta(s.confidence);
+    const agree = agreeCount(s);
+    const clients = clientChipsOf(s);
+    const move = moveText(s);
+    const reasoning = s.triangulated?.why ?? s.convergence?.theme ?? s.note ?? confRationale(s);
+    return (
+      <>
+        <button className="iq2-back" onClick={() => { setIqView("feed"); setIqOpenId(null); }}>← Back to insights</button>
+        <div className="iq2-dd-title">{s.title}</div>
+        <div className="iq2-dd-so">{s.detail}</div>
+        <div className="iq2-dd-gen">Deeper analysis · {s.deIdentified ? "de-identified across clients · " : ""}confidence {cm.label.toLowerCase()}</div>
+
+        <div className="iq2-stats">
+          <div className="iq2-stat ring">
+            {confRing(s.confidence, 34)}
+            <div><div className="iq2-stat-v">{Math.round(s.confidence * 100)}%</div><div className="iq2-stat-k">Confidence</div></div>
+          </div>
+          <div className="iq2-stat"><div className="iq2-stat-v">{agree || "—"}</div><div className="iq2-stat-k">Signals agree</div></div>
+          <div className="iq2-stat"><div className="iq2-stat-v">{shortAge(s.ageDays) || "—"}</div><div className="iq2-stat-k">Since detected</div></div>
+        </div>
+
+        {/* per-client breakdown, from a convergence trail when we have one */}
+        {s.convergence && s.convergence.signals.length > 0 && (
+          <>
+            <div className="iq2-sec-h">Where the signals land</div>
+            <div className="iq2-bd">
+              {s.convergence.signals.map((sig, i) => (
+                <div className="iq2-bd-item" key={i}>
+                  <div className="iq2-bd-head"><span className="iq2-bd-name">{sig.project}</span><span className="iq2-bd-status">{sig.modality}</span></div>
+                  <div className="iq2-bd-note">{sig.text}{sig.provenance ? <span className="tri-prov"> · {sig.provenance}</span> : null}</div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        <div className="iq2-sec-h">How this was reached</div>
+        <div className="iq2-reason">{reasoning}</div>
+
+        {/* the value-plane analysis block, if this signal carries one */}
+        {(s.offer || s.followOn || s.proposition || s.triangulated || s.convergence) && (
+          <>
+            <div className="iq2-sec-h">Analysis</div>
+            {s.offer && renderOfferBlock(s.offer)}
+            {s.followOn && renderFollowOnBlock(s.followOn)}
+            {s.proposition && renderPropositionBlock(s.proposition)}
+            {s.triangulated && renderTriangulatedBlock(s.triangulated)}
+            {s.convergence && renderConvergenceBlock(s.convergence)}
+          </>
+        )}
+
+        {/* verbatim evidence with an auditable confidence read */}
+        {s.assessment && s.assessment.factors.length > 0 && (
+          <>
+            <div className="iq2-sec-h">Why rated {cm.label.replace(" confidence", "")}</div>
+            <div className="factors">
+              {s.assessment.factors.map((f, i) => (
+                <div className={`factor fac-${f.status}`} key={i}>
+                  <span className="fac-dot">{f.status === "strong" ? "✓" : f.status === "moderate" ? "~" : "!"}</span>
+                  <span className="fac-label">{f.label}</span>
+                  <span className="fac-detail">{f.detail}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        {s.evidence.length > 0 && (
+          <>
+            <div className="iq2-sec-h">Evidence · {s.evidence.length}</div>
+            <div className="ev-trail">
+              {s.evidence.map((q, i) => (
+                <div className="ev-line" key={i}>
+                  <span className="ev-kind">{s.source ? "Source" : s.deIdentified ? "Pattern" : "Internal"}</span>
+                  <span className="ev-quote">“{q}”</span>
+                </div>
+              ))}
+              {s.support && (s.support.count || s.support.sectors?.length) && (
+                <div className="ev-support">
+                  Corroboration: {s.support.count ? <b>{s.support.count} engagement{s.support.count === 1 ? "" : "s"}</b> : "—"}
+                  {s.support.sectors?.length ? <> · {s.support.sectors.join(" · ")}</> : null}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {move && (
+          <div className="iq2-move">
+            <div className="iq2-move-h">Recommended move</div>
+            <div className="iq2-move-b">{move}</div>
+          </div>
+        )}
+
+        {clients.length > 0 && (
+          <div className="iq2-mentions">
+            <span className="iq2-mentions-lead">Mentions</span>
+            {clients.map((c) => (
+              <span className="iq2-mention" key={c} onClick={() => { setInboxClient(c); setIqView("client"); }}>{c} →</span>
+            ))}
+          </div>
+        )}
+
+        {renderHumanLoop(s)}
+      </>
     );
   }
   // Family → badge label + emoji.
@@ -937,6 +1675,10 @@ export default function Home() {
       "delivery-health": { icon: "🩺", label: "delivery health" },
       "risk-playbook": { icon: "📘", label: "risk playbook" },
       "new-service-line": { icon: "🌱", label: "new service line" },
+      "follow-on": { icon: "🤝", label: "follow-on" },
+      proposition: { icon: "🧭", label: "proposition" },
+      triangulated: { icon: "🔗", label: "triangulated" },
+      convergence: { icon: "🎯", label: "convergence" },
       pipeline: { icon: "📊", label: "pipeline" },
       resourcing: { icon: "🧑‍💼", label: "resourcing" },
       pricing: { icon: "💷", label: "pricing" },
@@ -977,8 +1719,12 @@ export default function Home() {
   function groupMeta(family: string): { label: string; kind: "opp" | "risk" | "deliv"; order: number } {
     const m: Record<string, { label: string; kind: "opp" | "risk" | "deliv"; order: number }> = {
       buying: { label: "Buying signal", kind: "opp", order: 1 },
+      "follow-on": { label: "Follow-on work", kind: "opp", order: 1.2 },
       pipeline: { label: "Pipeline", kind: "opp", order: 1.5 },
       "new-service-line": { label: "Expand the offer", kind: "opp", order: 2 },
+      proposition: { label: "New proposition", kind: "opp", order: 2.2 },
+      triangulated: { label: "Triangulated insight", kind: "opp", order: 2.4 },
+      convergence: { label: "Converging signals", kind: "risk", order: 0.5 },
       pricing: { label: "Pricing & margin", kind: "opp", order: 2.5 },
       competitive: { label: "Competitive", kind: "deliv", order: 3 },
       objection: { label: "Objection / positioning", kind: "deliv", order: 4 },
@@ -1053,8 +1799,9 @@ export default function Home() {
 
   // Ask across EVERY engagement straight from the inbox — no need to click into a
   // sector first. Routes through the firm-wide space so the answer is de-identified.
-  async function runInboxQuery() {
-    if (!inboxQuery.trim() || inboxQueryLoading) return;
+  async function runInboxQuery(override?: string) {
+    const q = (override ?? inboxQuery).trim();
+    if (!q || inboxQueryLoading) return;
     const firmId = spaces.find((sp) => sp.type === "firm")?.id;
     if (!firmId) return;
     setInboxQueryLoading(true);
@@ -1063,7 +1810,7 @@ export default function Home() {
       const d = await fetch("/api/space/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spaceId: firmId, query: inboxQuery, audience: spaceAudience, user, webSearch }),
+        body: JSON.stringify({ spaceId: firmId, query: q, audience: spaceAudience, user, webSearch }),
       }).then((r) => r.json());
       setInboxAnswer(d?.error ? { answer: `🔒 ${d.error}`, projectsUsed: [] } : d);
     } catch {
@@ -1938,128 +2685,181 @@ export default function Home() {
           {/* ---- Interrogate tab: cross-engagement querying, signals & lenses.
                The sales / marketing / delivery / BD surface — ask across every
                engagement, optionally blending external web search with firm data. ---- */}
-          {homeTab === "interrogate" && (<>
-
-          {/* ---- Ask (pull): one question across all our work, or one client ---- */}
-          <section className="home-section iq-ask-section">
-            <div className="home-section-head">
-              <h3>Ask across our work</h3>
-              <span className="home-role">answered from the firm's engagements — with provenance</span>
-            </div>
-            <div className="iq-ask">
-              <textarea
-                value={inboxQuery}
-                onChange={(e) => setInboxQuery(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runInboxQuery(); } }}
-                placeholder="e.g. Where's our strongest case for follow-on work right now?"
-                rows={2}
-              />
-              <div className="iq-ask-foot">
-                <label className="websearch-toggle" title="Bring in fresh external stories & reports from the web, synthesised with our data. External material is labelled 🌐 and never saved to the corpus.">
-                  <input type="checkbox" checked={webSearch} onChange={(e) => setWebSearch(e.target.checked)} />
-                  🌐 Blend in web {webSearch ? "· on" : "· off"}
-                </label>
-                <button className="iq-ask-btn" onClick={runInboxQuery} disabled={inboxQueryLoading || !inboxQuery.trim()}>
-                  {inboxQueryLoading ? "Synthesising…" : "Ask"}
-                </button>
-              </div>
-            </div>
-            {inboxQueryLoading && <div className="iq-process">searched engagements → drilled the relevant ones → extracted evidence → synthesised…</div>}
-            {inboxAnswer && (
-              <div className="iq-answer">
-                <div className="markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{inboxAnswer.answer}</ReactMarkdown>
-                </div>
-                {inboxAnswer.projectsUsed.length > 0 && (
-                  <div className="iq-provenance">
-                    <span className="iq-prov-label">Grounded in {inboxAnswer.projectsUsed.length} engagement{inboxAnswer.projectsUsed.length === 1 ? "" : "s"}</span>
-                    {inboxAnswer.projectsUsed.map((p) => (
-                      <span key={p.project} className="iq-prov-chip" title={`${p.client} · ${p.sector}`}>
-                        {p.title}{p.client !== "(withheld)" ? ` · ${p.client}` : ""}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-
-          {/* ---- Surfaced for you (push): shared, uncapped, confidence-gated ---- */}
-          {(inboxLoading || inboxSignals !== null) && (() => {
+          {homeTab === "interrogate" && (() => {
+            // ---- 4a: one page, four states, a right-hand filter rail ----
             const afterDismiss = (inboxSignals ?? []).filter((s) => !dismissed[s.id]);
             const sectorOpts = Array.from(new Set(afterDismiss.flatMap((s) => [s.sector, ...(s.support?.sectors ?? [])]).filter(Boolean) as string[])).sort();
-            const clientOpts = Array.from(new Set(afterDismiss.flatMap((s) => [s.client, ...(s.support?.clients ?? [])]).filter(Boolean) as string[])).sort();
+            const clientOpts = Array.from(new Set(afterDismiss.flatMap((s) => clientChipsOf(s)).filter(Boolean))).sort();
             const matchesSector = (s: InboxSignal) => inboxSector === "all" || s.sector === inboxSector || (s.support?.sectors ?? []).includes(inboxSector);
-            const matchesClient = (s: InboxSignal) => inboxClient === "all" || s.client === inboxClient || (s.support?.clients ?? []).includes(inboxClient);
-            const scoped = afterDismiss.filter((s) => matchesSector(s) && matchesClient(s));
-            const shown = scoped.filter(meetsConf);
-            const below = scoped.length - shown.length;
-            const barLabel = inboxMinConf === "high" ? "High" : inboxMinConf === "medium" ? "Medium" : "any";
-            // Group by family → outcome, ordered opportunities-first. Uncapped: if lots
-            // clear the bar, show them all — the confidence filter is the throttle.
-            const families = Array.from(new Set(shown.map((s) => s.family)));
-            families.sort((a, b) => groupMeta(a).order - groupMeta(b).order);
-            const confChoices: { key: "high" | "medium" | "all"; label: string }[] = [
-              { key: "high", label: "High" }, { key: "medium", label: "Medium" }, { key: "all", label: "All" },
+            const matchesClient = (s: InboxSignal) => inboxClient === "all" || clientChipsOf(s).includes(inboxClient);
+            const scoped = afterDismiss.filter((s) => matchesSector(s) && matchesClient(s)).sort((a, b) => b.score - a.score);
+            const attention = scoped.filter((s) => iqPriority(s) === "attention");
+            const know = scoped.filter((s) => iqPriority(s) === "know");
+            const hasFilter = inboxClient !== "all" || inboxSector !== "all";
+            const openSig = iqOpenId ? afterDismiss.find((s) => s.id === iqOpenId) ?? null : null;
+            const initials = (n: string) => n.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+            // facet counts respect the OTHER active filter so the numbers stay honest
+            const clientFacets = clientOpts.map((c) => ({ name: c, count: afterDismiss.filter(matchesSector).filter((s) => clientChipsOf(s).includes(c)).length })).filter((f) => f.count > 0);
+            const sectorFacets = sectorOpts.map((sec) => ({ name: sec, count: afterDismiss.filter(matchesClient).filter((s) => s.sector === sec || (s.support?.sectors ?? []).includes(sec)).length })).filter((f) => f.count > 0);
+            const engagementCount = projects.length || clientOpts.length;
+            const suggested = [
+              "Where's our strongest follow-on right now?",
+              "Which risks are showing up across engagements?",
+              "Where are we repeating work?",
             ];
             return (
-              <section className="home-section iq-surfaced">
-                <div className="surf-head">
-                  <h3>⭐ Surfaced for you {!inboxLoading && <span className="count">{shown.length} clear your {barLabel} bar</span>}</h3>
-                  <div className="surf-controls">
-                    <div className="conf-filter" title="Default is High so what surfaces is trustworthy; lower it to hunt earlier, rougher leads.">
-                      <span className="cf-label">confidence</span>
-                      {confChoices.map((c) => (
-                        <button key={c.key} className={`cf-opt ${inboxMinConf === c.key ? "active" : ""}`} onClick={() => setInboxMinConf(c.key)}>{c.label}</button>
-                      ))}
+              <div className="iq2-page">
+                <div className="iq2-main"><div className="iq2-col">
+
+                  {/* ===== FEED ===== */}
+                  {iqView === "feed" && (<>
+                    <div className="iq2-feedhead">
+                      <div className="lhs"><span className="iq2-feedtitle">Insights</span><span className="iq2-feedsub">Ranked by value · {engagementCount} engagement{engagementCount === 1 ? "" : "s"}</span></div>
+                      {!inboxLoading && <span className="iq2-updated">Updated just now</span>}
                     </div>
-                    {(sectorOpts.length > 0 || clientOpts.length > 0) && (
-                      <div className="surf-scope">
-                        <select value={inboxSector} onChange={(e) => setInboxSector(e.target.value)}>
-                          <option value="all">All sectors</option>
-                          {sectorOpts.map((o) => <option key={o} value={o}>{o.replace(/-/g, " ")}</option>)}
-                        </select>
-                        <select value={inboxClient} onChange={(e) => setInboxClient(e.target.value)}>
-                          <option value="all">All clients</option>
-                          {clientOpts.map((o) => <option key={o} value={o}>{o}</option>)}
-                        </select>
+
+                    <div className="iq2-askbar" onClick={() => setIqView("ask")}>
+                      <span className="iq2-ask-glyph" />
+                      <textarea
+                        value={inboxQuery}
+                        onChange={(e) => setInboxQuery(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askIq(); } }}
+                        placeholder="Ask anything across your projects — it searches the raw data, not just this page…"
+                        rows={1}
+                      />
+                      <button className="iq2-askbar-btn" disabled={inboxQueryLoading || !inboxQuery.trim()} onClick={(e) => { e.stopPropagation(); askIq(); }}>Ask</button>
+                    </div>
+                    <div className="iq2-chips">
+                      {suggested.map((q) => <span key={q} className="iq2-chip" onClick={() => askIq(q)}>{q}</span>)}
+                      <label className="iq2-chip web" title="Blend fresh external context from the web with our data. External material is labelled 🌐 and never saved to the corpus.">
+                        <input type="checkbox" checked={webSearch} onChange={(e) => setWebSearch(e.target.checked)} style={{ marginRight: 5 }} />
+                        🌐 web {webSearch ? "on" : "off"}
+                      </label>
+                    </div>
+
+                    {hasFilter && (
+                      <div className="iq2-filterbar">
+                        <span className="iq2-filter-lead">Filtered by</span>
+                        {inboxClient !== "all" && <span className="iq2-activechip" onClick={() => setInboxClient("all")}>{inboxClient} ✕</span>}
+                        {inboxSector !== "all" && <span className="iq2-activechip" onClick={() => setInboxSector("all")}>{inboxSector.replace(/-/g, " ")} ✕</span>}
+                        <span className="iq2-filter-count">{scoped.length} of {afterDismiss.length}</span>
                       </div>
                     )}
-                  </div>
-                </div>
 
-                {inboxLoading && <div className="iq-process">scanning transcripts, risk registers &amp; offer gaps for signals…</div>}
-                {memNote && <div className="hint briefing-note">{memNote}</div>}
+                    {inboxLoading && <div className="iq-process">scanning transcripts, risk registers &amp; offer gaps for signals…</div>}
+                    {memNote && <div className="hint briefing-note">{memNote}</div>}
 
-                {!inboxLoading && shown.length === 0 && (
-                  <div className="iq-empty">Nothing clears the {barLabel} bar right now{below > 0 ? <> — <button className="link-btn" onClick={() => setInboxMinConf(inboxMinConf === "high" ? "medium" : "all")}>lower the bar</button> to see {below} more.</> : "."}</div>
-                )}
+                    {!inboxLoading && scoped.length === 0 && (
+                      <div className="iq2-empty">{hasFilter ? "No insights match these filters." : "Nothing surfaced yet."}</div>
+                    )}
 
-                {!inboxLoading && families.map((fam) => {
-                  const gm = groupMeta(fam);
-                  const items = shown.filter((s) => s.family === fam);
-                  return (
-                    <div key={fam} className="iq-group">
-                      <div className="iq-group-head">
-                        <span className={`kind-pill kind-${gm.kind}`}>{gm.label}</span>
-                        <span className="iq-group-count">{items.length}</span>
+                    {!inboxLoading && attention.length > 0 && (<>
+                      <div className="iq2-grouphead">
+                        <span className="iq2-gdot attention" /><span className="iq2-glabel attention">Needs attention</span>
+                        <span className="iq2-gcount">{attention.length}</span><div className="iq2-rule" />
                       </div>
-                      <div className="iq-feed">{items.map(renderInsightCard)}</div>
-                    </div>
-                  );
-                })}
+                      {attention.map(renderIqCard)}
+                    </>)}
 
-                {!inboxLoading && shown.length > 0 && below > 0 && (
-                  <div className="iq-threshold">
-                    Showing all {shown.length} at {barLabel} confidence. {below} more sit below the bar —{" "}
-                    <button className="link-btn" onClick={() => setInboxMinConf(inboxMinConf === "high" ? "medium" : "all")}>lower to {inboxMinConf === "high" ? "Medium" : "All"}</button> to hunt earlier leads.
+                    {!inboxLoading && know.length > 0 && (<>
+                      <div className="iq2-grouphead">
+                        <span className="iq2-gdot know" /><span className="iq2-glabel know">Worth knowing</span>
+                        <span className="iq2-gcount">{know.length}</span><div className="iq2-rule" />
+                      </div>
+                      <div className="iq2-rows">{know.map(renderIqRow)}</div>
+                    </>)}
+                  </>)}
+
+                  {/* ===== DIG-DEEPER ===== */}
+                  {iqView === "insight" && (openSig
+                    ? renderDigDeeper(openSig)
+                    : <><button className="iq2-back" onClick={() => setIqView("feed")}>← Back to insights</button><div className="iq2-empty">That insight is no longer in the feed.</div></>
+                  )}
+
+                  {/* ===== ASK ===== */}
+                  {iqView === "ask" && (<>
+                    <button className="iq2-back" onClick={() => setIqView("feed")}>← Back to insights</button>
+                    {inboxQuery.trim() && <div className="iq2-ask-q"><div>{inboxQuery}</div></div>}
+                    {inboxQueryLoading && (
+                      <div className="iq-process">searched engagements → drilled the relevant ones → extracted evidence → synthesised…</div>
+                    )}
+                    {inboxAnswer && (<>
+                      <div className="iq2-ask-searched">
+                        <span className="iq2-ask-glyph" />
+                        <span className="txt">Searched the firm's engagements{inboxAnswer.projectsUsed.length ? ` · ${inboxAnswer.projectsUsed.length} relevant` : ""}</span>
+                        <span className="iq2-newfinding">NEW FINDING</span>
+                      </div>
+                      <div className="iq2-ask-answer"><div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{inboxAnswer.answer}</ReactMarkdown></div></div>
+                      {inboxAnswer.projectsUsed.length > 0 && (
+                        <div className="iq-provenance">
+                          <span className="iq-prov-label">Evidence from {inboxAnswer.projectsUsed.length} engagement{inboxAnswer.projectsUsed.length === 1 ? "" : "s"}</span>
+                          {inboxAnswer.projectsUsed.map((p) => (
+                            <span key={p.project} className="iq-prov-chip" title={`${p.client} · ${p.sector}`}>{p.title}{p.client !== "(withheld)" ? ` · ${p.client}` : ""}</span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="iq2-save">
+                        {iqSavedAsk
+                          ? <span className="iq2-save-hint">✓ Saved — it'll surface in your feed on the next signal build.</span>
+                          : <><button className="iq2-save-btn" onClick={() => setIqSavedAsk(true)}>Save as insight</button><span className="iq2-save-hint">Surfaced from this question — not yet in your feed</span></>}
+                      </div>
+                    </>)}
+                    <div className="iq2-followbox">
+                      <textarea
+                        value={inboxQuery}
+                        onChange={(e) => setInboxQuery(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askIq(); } }}
+                        placeholder="Ask a follow-up — searches the raw project data…"
+                        rows={1}
+                        style={{ flex: 1, border: "none", background: "transparent", resize: "none", font: "inherit", outline: "none" }}
+                      />
+                      <button className="iq2-askbar-btn" disabled={inboxQueryLoading || !inboxQuery.trim()} onClick={() => askIq()}>Send</button>
+                    </div>
+                  </>)}
+
+                  {/* ===== CLIENT ===== */}
+                  {iqView === "client" && (<>
+                    <button className="iq2-back" onClick={() => { setIqView("feed"); setInboxClient("all"); }}>← Back to insights</button>
+                    <div className="iq2-feedhead"><div className="lhs"><span className="iq2-feedtitle">{inboxClient === "all" ? "All clients" : inboxClient}</span><span className="iq2-feedsub">{scoped.length} insight{scoped.length === 1 ? "" : "s"}</span></div></div>
+                    {scoped.length === 0 ? <div className="iq2-empty">No insights for this client.</div> : scoped.map(renderIqCard)}
+                  </>)}
+
+                </div></div>
+
+                {/* ===== RIGHT RAIL — filters ===== */}
+                <div className="iq2-rail">
+                  <div className="iq2-rail-head">
+                    <span className="iq2-rail-h">Filter</span>
+                    {hasFilter && <button className="iq2-rail-clear" onClick={() => { setInboxClient("all"); setInboxSector("all"); }}>Clear all</button>}
                   </div>
-                )}
-              </section>
+                  {clientFacets.length > 0 && (<>
+                    <div className="iq2-facet-h">Client</div>
+                    <div className="iq2-facets">
+                      {clientFacets.map((c) => (
+                        <button key={c.name} className={`iq2-facet ${inboxClient === c.name ? "active" : ""}`} onClick={() => setInboxClient(inboxClient === c.name ? "all" : c.name)}>
+                          <span className="iq2-facet-avatar">{initials(c.name)}</span>
+                          <span className="iq2-facet-name">{c.name}</span>
+                          <span className="iq2-facet-count">{c.count}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>)}
+                  {sectorFacets.length > 0 && (<>
+                    <div className="iq2-facet-h">Sector</div>
+                    <div className="iq2-facets">
+                      {sectorFacets.map((sec) => (
+                        <button key={sec.name} className={`iq2-facet ${inboxSector === sec.name ? "active" : ""}`} onClick={() => setInboxSector(inboxSector === sec.name ? "all" : sec.name)}>
+                          <span className="iq2-facet-dot" />
+                          <span className="iq2-facet-name">{sec.name.replace(/-/g, " ")}</span>
+                          <span className="iq2-facet-count">{sec.count}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>)}
+                </div>
+              </div>
             );
           })()}
-
-          </>)}
         </div>
       )}
 
@@ -2126,6 +2926,23 @@ export default function Home() {
                 which plans and delegates to specialists on its own — no agent to pick. */}
           </div>
           <div className="chat">
+            {/* In-project Findings — the grounded flags for THIS engagement, always
+                available here (not only in the corner nudge). Same ledger rows. */}
+            {liveFindings.length > 0 && (
+              <div className="findings-panel">
+                <button className="findings-panel-head" aria-expanded={!findingsPanelCollapsed} onClick={() => setFindingsPanelCollapsed((c) => !c)}>
+                  <span className="fp-title">⚑ Findings</span>
+                  <span className="fp-count">{liveFindings.length}</span>
+                  <span className="fp-hint">grounded flags for this engagement</span>
+                  <span className="fp-chev">{findingsPanelCollapsed ? "▸" : "▾"}</span>
+                </button>
+                {!findingsPanelCollapsed && (
+                  <div className="findings-panel-body">
+                    {liveFindings.map(renderFindingRow)}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="messages">
               {/* Warm start: on a cold project, proactively show what we already know
                   + starter questions + an optional 3-question kickoff interview. */}
@@ -2426,6 +3243,7 @@ export default function Home() {
             {!popupCollapsed && (
               <div className="nudge-body">
                 {shown.map((it) => {
+                  if (it.t === "finding") return renderFindingRow(it.f);
                   if (it.t === "offer") {
                     const offer = it.offer;
                     return (

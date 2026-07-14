@@ -1,0 +1,14 @@
+{
+  "source": "pricing",
+  "label": "Pricing sheet 2026 · rate card & comparable engagements",
+  "bookMarginAvg": 0.24,
+  "note": "Stand-in for what a live pricing connector (MCP) would return: past engagements with realised price + margin. lib/offers.ts matches a whitespace need to the closest comparables and derives an indicative range — it never invents a point price.",
+  "comparables": [
+    { "id": "cmp-impl-1", "offering": "Implementation & adoption programme — embedded delivery of a strategy roll-out", "sector": "healthcare", "price": 145000, "margin": 0.41 },
+    { "id": "cmp-impl-2", "offering": "Change-management & organisational adoption support for a transformation", "sector": "financial-services", "price": 128000, "margin": 0.38 },
+    { "id": "cmp-impl-3", "offering": "Implementation & change support post-recommendation — hands-on delivery, not just advice", "sector": "retail", "price": 112000, "margin": 0.36 },
+    { "id": "cmp-ms", "offering": "Market sizing & competitor landscape study", "sector": "healthcare", "price": 42000, "margin": 0.22 },
+    { "id": "cmp-dd", "offering": "Commercial due diligence for a mid-market acquisition", "sector": "financial-services", "price": 68000, "margin": 0.26 },
+    { "id": "cmp-om", "offering": "Target operating-model design, on paper (recommendation only)", "sector": "healthcare", "price": 60000, "margin": 0.25 }
+  ]
+}

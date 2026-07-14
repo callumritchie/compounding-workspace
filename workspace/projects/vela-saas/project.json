@@ -1,0 +1,10 @@
+{
+  "id": "vela-saas",
+  "name": "Growth diagnostic",
+  "client": "vela",
+  "sector": "technology",
+  "type": "strategy",
+  "status": "in-progress",
+  "team": ["callum", "bob"],
+  "stakeholders": ["vela-cpo"]
+}

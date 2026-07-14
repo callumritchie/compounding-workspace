@@ -6,5 +6,8 @@
   "status": "complete",
   "team": [
     "bob"
+  ],
+  "stakeholders": [
+    "northwind-cfo"
   ]
 }

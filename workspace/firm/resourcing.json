@@ -1,0 +1,13 @@
+{
+  "source": "drive",
+  "label": "Resourcing plan 2026",
+  "note": "Stand-in for what a live resourcing connector (MCP) would return: who's staffed, who's rolling off, open roles + skills. lib/offers.ts matches a need's skills against the bench to answer 'can we actually deliver this' — surfacing the gap, not just the good news.",
+  "people": [
+    { "id": "okafor", "name": "J. Okafor", "grade": "Principal", "skills": ["change management", "organisational adoption", "transformation delivery", "stakeholder engagement"], "current": "acme-diligence", "rollsOffInDays": 14 },
+    { "id": "reyes", "name": "M. Reyes", "grade": "Manager", "skills": ["implementation", "change management", "programme delivery", "execution support"], "current": null, "rollsOffInDays": 0 },
+    { "id": "chen", "name": "L. Chen", "grade": "Consultant", "skills": ["market sizing", "financial modelling", "customer research"], "current": "meridian-health", "rollsOffInDays": 60 }
+  ],
+  "openRoles": [
+    { "role": "Senior Delivery Lead (implementation)", "skills": ["implementation", "change management", "programme delivery"] }
+  ]
+}

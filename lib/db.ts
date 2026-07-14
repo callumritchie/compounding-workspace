@@ -227,6 +227,67 @@ CREATE TABLE IF NOT EXISTS signal_annotations (
   status    TEXT NOT NULL DEFAULT 'active'          -- active | withdrawn
 );
 CREATE INDEX IF NOT EXISTS idx_annotations_signal ON signal_annotations(signal_id);
+
+-- LIFECYCLE state of a surfaced insight — how the team closes one off over time
+-- WITHOUT losing it. Append-only; the latest row per signal_id is the current state.
+-- resolved / snoozed(active) leave the ACTIVE feed (resolved → History, never deleted);
+-- owned keeps it in the feed with an owner. Recompute + this thin layer keeps the feed
+-- bounded without dropping value; reopened undoes a close.
+CREATE TABLE IF NOT EXISTS signal_state (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  signal_id    TEXT NOT NULL,                          -- stable inbox signal id
+  actor        TEXT NOT NULL,
+  state        TEXT NOT NULL,                          -- owned | resolved | snoozed | reopened
+  note         TEXT,
+  snooze_until TEXT,                                   -- ISO — set when state = 'snoozed'
+  ts           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_signal_state_sig ON signal_state(signal_id);
+
+-- In-project FINDINGS feedback (the proactive "Findings" surface). Findings are
+-- recomputed on demand from the engagement's own state, so — like the annotations
+-- above — feedback is keyed by the finding's STABLE id (e.g. 'rr:acme-health:budget')
+-- and read back at build time. This is what makes a dismiss actually stick (the old
+-- inbox dismiss was a no-op on derived signals) and what lets the surface LEARN:
+--   • dismissed  + reason 'wrong'        → retire the finding for the whole team
+--   • dismissed  + reason 'not-relevant' → mute it for this user (and its class)
+--   • snoozed    ('not-now')             → hide until snooze_until, then re-surface
+--   • accepted / saved                   → positive signal the ranker reinforces
+CREATE TABLE IF NOT EXISTS finding_feedback (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  finding_id   TEXT NOT NULL,                        -- stable finding id
+  kind         TEXT NOT NULL,                        -- finding kind (for class-level learning)
+  project      TEXT,
+  actor        TEXT NOT NULL,
+  response     TEXT NOT NULL,                        -- accepted | saved | dismissed | snoozed
+  reason       TEXT,                                 -- not-relevant | wrong | not-now (on dismiss/snooze)
+  snooze_until TEXT,                                 -- ISO — set when response = 'snoozed'
+  ts           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_finding_feedback_fid ON finding_feedback(finding_id);
+CREATE INDEX IF NOT EXISTS idx_finding_feedback_proj ON finding_feedback(project);
+
+-- STORED findings — the LLM-detected kinds (ungrounded-claim from the faithfulness
+-- judge on an answer; contradiction from an upload). Unlike the deterministic
+-- detectors (rising-risk / unanswered-objective, recomputed live from state), these
+-- are point-in-time judgements, so they're persisted with a stable id and merged
+-- into buildFindings alongside the live ones. Dismissal rides the same
+-- finding_feedback table, keyed by this id.
+CREATE TABLE IF NOT EXISTS stored_findings (
+  id         TEXT PRIMARY KEY,
+  project    TEXT NOT NULL,
+  kind       TEXT NOT NULL,                        -- ungrounded-claim | contradiction
+  title      TEXT NOT NULL,
+  detail     TEXT,
+  evidence   TEXT,                                 -- JSON [{quote,source}]
+  confidence REAL NOT NULL DEFAULT 0.6,
+  urgency    REAL NOT NULL DEFAULT 0.6,
+  trigger    TEXT,
+  action     TEXT,                                 -- JSON {title,prompt} or NULL
+  ts         TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'open'          -- open | superseded
+);
+CREATE INDEX IF NOT EXISTS idx_stored_findings_project ON stored_findings(project);
 `;
 
 // sqlite-vec takes an embedding as a JSON array string.
