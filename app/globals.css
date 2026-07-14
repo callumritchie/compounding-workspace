@@ -35,6 +35,7 @@
   --risk: #b23b3b;       --risk-soft: #f6e4e2;
   --delivery: #2c6f74;   --delivery-soft: #dfeded;   /* delivery / positioning */
   --good: #3f7d54;       --good-soft: #e4efe6;        /* confirmed / passes check */
+  --warn: #a06a2c;       --warn-soft: #f4ece0;   --warn-dot: #c9863f;  /* "needs attention" (amber) */
 
   /* per-user identity chips */
   --user-a: #2c6eb4;      /* Callum */
@@ -1046,3 +1047,138 @@ html, body {
 .foot-btn:hover { border-color: var(--accent); color: var(--accent); }
 .foot-sep { flex: 1; }
 .composer-lead { font-size: 11.5px; color: var(--ink-2); margin-bottom: 7px; }
+
+/* ===================================================================
+   Interrogate · 4a redesign ("Insights Redesign", option 4a)
+   A stateful page — feed → dig-deeper → ask → client — with a right-hand
+   filter rail. Minimal feed cards; depth lives in the dig-deeper view.
+   Built entirely on the shared tokens above (no per-feature colour drift):
+   4a's coral → --accent, its greens → --good, its ambers → --warn.
+   =================================================================== */
+.iq2-page { display: flex; align-items: flex-start; gap: 0; }
+.iq2-main { flex: 1; min-width: 0; padding: 4px 34px 40px 4px; }
+.iq2-col { max-width: 720px; margin: 0 auto; }         /* readable column cap */
+.iq2-rail { width: 264px; flex: none; align-self: stretch; border-left: 1px solid var(--hair); background: var(--surface-2); padding: 22px 18px; border-radius: 0 var(--r-lg) var(--r-lg) 0; }
+
+/* feed header */
+.iq2-feedhead { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 16px; }
+.iq2-feedhead .lhs { display: flex; align-items: baseline; gap: 13px; }
+.iq2-feedtitle { font-size: 22px; font-weight: 600; letter-spacing: -.015em; color: var(--ink); }
+.iq2-feedsub { font-size: 13px; font-weight: 500; color: var(--ink-3); }
+.iq2-updated { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+
+/* ask bar (prominent, top of feed) */
+.iq2-askbar { display: flex; align-items: center; gap: 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px; box-shadow: var(--shadow); cursor: text; transition: border-color .12s; }
+.iq2-askbar:hover { border-color: var(--accent); }
+.iq2-askbar textarea { flex: 1; border: none; background: transparent; resize: none; font: inherit; font-size: 14px; color: var(--ink); outline: none; padding: 0; line-height: 1.4; }
+.iq2-askbar textarea::placeholder { color: var(--ink-3); }
+.iq2-ask-glyph { width: 16px; height: 16px; border: 1.7px solid var(--accent); border-radius: 50%; position: relative; flex: none; }
+.iq2-ask-glyph::after { content: ""; position: absolute; width: 6px; height: 1.7px; background: var(--accent); bottom: -2px; right: -3px; transform: rotate(45deg); }
+.iq2-askbar-btn { font-family: var(--mono); font-size: 11px; font-weight: 600; color: #fff; background: var(--accent); padding: 6px 13px; border-radius: 7px; border: none; cursor: pointer; flex: none; }
+.iq2-askbar-btn:disabled { opacity: .5; cursor: default; }
+.iq2-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
+.iq2-chip { font-size: 11.5px; font-weight: 500; color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--hair); padding: 6px 12px; border-radius: 20px; cursor: pointer; }
+.iq2-chip:hover { border-color: var(--accent); color: var(--accent); }
+.iq2-chip.web { margin-left: auto; }
+
+/* active-filter row */
+.iq2-filterbar { display: flex; align-items: center; gap: 8px; margin-top: 15px; flex-wrap: wrap; }
+.iq2-filter-lead { font-size: 11px; font-weight: 500; color: var(--ink-2); }
+.iq2-activechip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11.5px; color: var(--accent); background: var(--accent-soft); border: 1px solid rgba(180,86,44,.28); padding: 4px 10px; border-radius: 20px; cursor: pointer; }
+.iq2-filter-count { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+
+/* priority group headers */
+.iq2-grouphead { display: flex; align-items: center; gap: 9px; margin: 26px 0 4px; }
+.iq2-gdot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.iq2-gdot.attention { background: var(--warn-dot); }
+.iq2-gdot.know { background: var(--ink-3); }
+.iq2-glabel { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.iq2-glabel.attention { color: var(--warn); }
+.iq2-glabel.know { color: var(--ink-2); }
+.iq2-gcount { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.iq2-rule { flex: 1; height: 1px; background: var(--hair); }
+
+/* feed card (minimal — leads with the finding + trust bar) */
+.iq2-card { margin-top: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 13px; padding: 17px 18px; cursor: pointer; transition: border-color .12s, box-shadow .12s; }
+.iq2-card:hover { border-color: var(--accent); box-shadow: var(--shadow); }
+.iq2-card.owned { border-left: 3px solid var(--good); }
+.iq2-card.aged { opacity: .66; }
+.iq2-card-title { font-size: 16.5px; line-height: 1.32; font-weight: 600; letter-spacing: -.01em; color: var(--ink); margin-bottom: 6px; }
+.iq2-card-so { font-size: 13.5px; line-height: 1.5; color: var(--ink-2); }
+
+/* trust bar */
+.iq2-trust { display: flex; align-items: center; gap: 13px; margin-top: 14px; flex-wrap: wrap; }
+.iq2-ring { position: relative; display: inline-block; flex: none; border-radius: 50%; }
+.iq2-ring-hole { position: absolute; inset: 3px; border-radius: 50%; background: var(--surface); }
+.iq2-conf { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
+.iq2-agree { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
+.iq2-cchips { display: flex; gap: 5px; flex-wrap: wrap; }
+.iq2-cchip { font-family: var(--mono); font-size: 10px; color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--hair); padding: 2px 7px; border-radius: 20px; }
+.iq2-recency { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); margin-left: auto; }
+.iq2-owned-tag { font-family: var(--mono); font-size: 10px; color: var(--good); background: var(--good-soft); padding: 2px 7px; border-radius: 20px; }
+.iq2-aged-tag { font-family: var(--mono); font-size: 10px; color: var(--ink-3); background: var(--surface-2); padding: 2px 7px; border-radius: 20px; }
+.iq2-cardfoot { display: flex; align-items: center; margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--hair-2); }
+.iq2-viewlink { font-size: 12.5px; font-weight: 500; color: var(--accent); }
+
+/* compact "worth knowing" rows */
+.iq2-rows { margin-top: 6px; display: flex; flex-direction: column; }
+.iq2-row { display: flex; align-items: center; gap: 12px; padding: 13px 4px; border-bottom: 1px solid var(--hair); cursor: pointer; }
+.iq2-row:hover .iq2-row-title { color: var(--accent); }
+.iq2-row-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); flex: none; }
+.iq2-row-title { font-size: 13.5px; line-height: 1.35; font-weight: 500; color: var(--ink); flex: 1; }
+.iq2-row-meta { font-family: var(--mono); font-size: 11px; color: var(--ink-3); flex: none; }
+.iq2-row-caret { color: var(--ink-3); font-size: 16px; }
+
+.iq2-empty { padding: 40px 0; text-align: center; font-size: 13px; font-weight: 500; color: var(--ink-3); }
+.iq2-back { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 500; color: var(--accent); cursor: pointer; margin-bottom: 16px; background: none; border: none; padding: 0; }
+
+/* dig-deeper view */
+.iq2-dd-title { font-size: 24px; line-height: 1.28; font-weight: 600; letter-spacing: -.015em; color: var(--ink); margin-bottom: 8px; }
+.iq2-dd-so { font-size: 15px; line-height: 1.55; color: var(--ink-2); margin-bottom: 6px; }
+.iq2-dd-gen { font-family: var(--mono); font-size: 11px; color: var(--ink-3); margin-bottom: 20px; }
+.iq2-stats { display: flex; gap: 11px; }
+.iq2-stat { flex: 1; background: var(--surface); border: 1px solid var(--hair); border-radius: 11px; padding: 13px 15px; }
+.iq2-stat.ring { display: flex; align-items: center; gap: 11px; }
+.iq2-stat-v { font-family: var(--mono); font-size: 18px; font-weight: 600; color: var(--ink); }
+.iq2-stat-k { font-size: 9.5px; font-weight: 500; letter-spacing: .03em; text-transform: uppercase; color: var(--ink-3); margin-top: 2px; }
+.iq2-sec-h { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); margin: 24px 0 10px; }
+.iq2-bd { display: flex; flex-direction: column; gap: 9px; }
+.iq2-bd-item { background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 12px 15px; }
+.iq2-bd-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 3px; }
+.iq2-bd-name { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.iq2-bd-status { font-family: var(--mono); font-size: 10.5px; color: var(--warn); }
+.iq2-bd-note { font-size: 12.5px; line-height: 1.45; color: var(--ink-2); }
+.iq2-reason { font-size: 13.5px; line-height: 1.55; color: var(--ink-2); }
+.iq2-move { margin-top: 20px; background: var(--accent-soft); border: 1px solid rgba(180,86,44,.22); border-radius: 12px; padding: 15px 16px; }
+.iq2-move-h { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--accent); margin-bottom: 7px; }
+.iq2-move-b { font-size: 13.5px; line-height: 1.55; color: var(--ink); }
+.iq2-mentions { display: flex; align-items: center; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+.iq2-mentions-lead { font-size: 11px; font-weight: 500; color: var(--ink-3); }
+.iq2-mention { font-family: var(--mono); font-size: 11px; color: var(--accent); background: var(--accent-soft); border: 1px solid rgba(180,86,44,.2); padding: 4px 10px; border-radius: 20px; cursor: pointer; }
+
+/* ask view */
+.iq2-ask-q { display: flex; justify-content: flex-end; margin-bottom: 20px; }
+.iq2-ask-q > div { max-width: 80%; background: var(--accent); color: #fff; font-size: 14px; line-height: 1.45; font-weight: 500; padding: 12px 16px; border-radius: 14px 14px 4px 14px; }
+.iq2-ask-searched { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.iq2-ask-searched .txt { font-family: var(--mono); font-size: 11px; color: var(--ink-3); flex: 1; }
+.iq2-newfinding { font-family: var(--mono); font-size: 9.5px; font-weight: 600; letter-spacing: .04em; color: var(--good); background: var(--good-soft); padding: 3px 8px; border-radius: 20px; }
+.iq2-ask-answer { font-size: 15px; line-height: 1.6; color: var(--ink); }
+.iq2-ask-answer .markdown { font-size: 15px; }
+.iq2-save { margin-top: 16px; display: flex; align-items: center; gap: 9px; }
+.iq2-save-btn { font-size: 11.5px; font-weight: 500; color: #fff; background: var(--accent); padding: 6px 12px; border-radius: 8px; border: none; cursor: pointer; }
+.iq2-save-hint { font-size: 11px; color: var(--ink-3); }
+.iq2-followbox { margin-top: 18px; display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 11px 14px; }
+
+/* right rail facets */
+.iq2-rail-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
+.iq2-rail-h { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); }
+.iq2-rail-clear { font-size: 11px; font-weight: 500; color: var(--accent); cursor: pointer; background: none; border: none; padding: 0; }
+.iq2-facet-h { font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 6px; }
+.iq2-facets { display: flex; flex-direction: column; gap: 1px; margin-bottom: 22px; }
+.iq2-facet { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 8px; cursor: pointer; background: none; border: none; text-align: left; width: 100%; }
+.iq2-facet:hover { background: var(--surface); }
+.iq2-facet.active { background: var(--accent-soft); }
+.iq2-facet-avatar { width: 22px; height: 22px; border-radius: 6px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 9.5px; font-weight: 600; color: var(--warn); flex: none; }
+.iq2-facet-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--delivery); flex: none; margin: 0 7px; }
+.iq2-facet-name { font-size: 12.5px; font-weight: 500; color: var(--ink); flex: 1; text-transform: capitalize; }
+.iq2-facet-count { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
